@@ -94,7 +94,7 @@ export function buildUsagePageSections(): UsagePageSectionConfig[] {
     { key: 'serviceHealth', defaultExpanded: true },
     { key: 'charts', defaultExpanded: true },
     { key: 'tokenBreakdown', defaultExpanded: true },
-    { key: 'costTrend', defaultExpanded: true },
+    { key: 'costTrend', defaultExpanded: false },
     { key: 'apiModelBreakdown', defaultExpanded: false },
     { key: 'requestEvents', defaultExpanded: false },
     { key: 'credentialStats', defaultExpanded: false },

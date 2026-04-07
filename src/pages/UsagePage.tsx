@@ -421,15 +421,21 @@ export function UsagePage() {
         hourWindowHours={hourWindowHours}
       />
 
-      {/* Cost Trend Chart */}
-      <CostTrendChart
-        usage={filteredUsage}
-        loading={loading}
-        isDark={isDark}
-        isMobile={isMobile}
-        modelPrices={modelPrices}
-        hourWindowHours={hourWindowHours}
-      />
+      <ExpandableUsageSection
+        title={t('usage_stats.cost_trend')}
+        hint={t('usage_stats.expand_on_demand_hint')}
+        expanded={expandedSections.costTrend}
+        onToggle={() => toggleSection('costTrend')}
+      >
+        <CostTrendChart
+          usage={filteredUsage}
+          loading={loading}
+          isDark={isDark}
+          isMobile={isMobile}
+          modelPrices={modelPrices}
+          hourWindowHours={hourWindowHours}
+        />
+      </ExpandableUsageSection>
 
       <ExpandableUsageSection
         title={t('usage_stats.breakdown_panel_title')}

@@ -121,7 +121,7 @@ test('buildUsagePageSections collapses heavy panels by default', () => {
   assert.equal(lookup.get('serviceHealth'), true);
   assert.equal(lookup.get('charts'), true);
   assert.equal(lookup.get('tokenBreakdown'), true);
-  assert.equal(lookup.get('costTrend'), true);
+  assert.equal(lookup.get('costTrend'), false);
   assert.equal(lookup.get('apiModelBreakdown'), false);
   assert.equal(lookup.get('requestEvents'), false);
   assert.equal(lookup.get('credentialStats'), false);
