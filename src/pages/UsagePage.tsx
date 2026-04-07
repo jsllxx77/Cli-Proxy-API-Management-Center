@@ -16,11 +16,15 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { Select } from '@/components/ui/Select';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { authFilesApi } from '@/services/api/authFiles';
 import { useThemeStore, useConfigStore } from '@/stores';
+import type { AuthFileItem } from '@/types/authFile';
+import type { CredentialInfo } from '@/types/sourceInfo';
 import {
   StatCards,
   UsageChart,
   ChartLineSelector,
+  ExpandableUsageSection,
   ApiDetailsCard,
   ModelStatsCard,
   PriceSettingsCard,
@@ -37,9 +41,14 @@ import {
   getModelNamesFromUsage,
   getApiStats,
   getModelStats,
-  filterUsageByTimeRange,
   type UsageTimeRange
 } from '@/utils/usage';
+import {
+  buildAuthFileMap,
+  buildUsagePageSections,
+  deriveUsagePageData,
+  type UsagePageSectionKey
+} from './usagePageDerived';
 import styles from './UsagePage.module.scss';
 
 // Register Chart.js components
@@ -115,6 +124,15 @@ const loadTimeRange = (): UsageTimeRange => {
   }
 };
 
+const loadUsagePageSectionState = (): Record<UsagePageSectionKey, boolean> =>
+  buildUsagePageSections().reduce(
+    (acc, section) => {
+      acc[section.key] = section.defaultExpanded;
+      return acc;
+    },
+    {} as Record<UsagePageSectionKey, boolean>
+  );
+
 export function UsagePage() {
   const { t } = useTranslation();
   const isMobile = useMediaQuery('(max-width: 768px)');
@@ -125,6 +143,7 @@ export function UsagePage() {
   // Data hook
   const {
     usage,
+    usageDetails,
     loading,
     error,
     lastRefreshedAt,
@@ -144,6 +163,10 @@ export function UsagePage() {
   // Chart lines state
   const [chartLines, setChartLines] = useState<string[]>(loadChartLines);
   const [timeRange, setTimeRange] = useState<UsageTimeRange>(loadTimeRange);
+  const [expandedSections, setExpandedSections] =
+    useState<Record<UsagePageSectionKey, boolean>>(loadUsagePageSectionState);
+  const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
+  const [authFilesLoaded, setAuthFilesLoaded] = useState(false);
 
   const timeRangeOptions = useMemo(
     () =>
@@ -154,15 +177,36 @@ export function UsagePage() {
     [t]
   );
 
-  const filteredUsage = useMemo(
-    () => (usage ? filterUsageByTimeRange(usage, timeRange) : null),
-    [usage, timeRange]
+  const nowMs = lastRefreshedAt?.getTime() ?? 0;
+  const resolvedNowMs = nowMs > 0 ? nowMs : undefined;
+  const {
+    filteredUsage,
+    filteredUsageDetails,
+    fullUsageDetails
+  } = useMemo(
+    () =>
+      deriveUsagePageData({
+        usage,
+        timeRange,
+        fullUsageDetails: usageDetails,
+        nowMs: resolvedNowMs
+      }),
+    [resolvedNowMs, timeRange, usage, usageDetails]
   );
   const hourWindowHours =
     timeRange === 'all' ? undefined : HOUR_WINDOW_BY_TIME_RANGE[timeRange];
 
+  const needsAuthFileMap = expandedSections.requestEvents || expandedSections.credentialStats;
+
   const handleChartLinesChange = useCallback((lines: string[]) => {
     setChartLines(normalizeChartLines(lines));
+  }, []);
+
+  const toggleSection = useCallback((key: UsagePageSectionKey) => {
+    setExpandedSections((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
   }, []);
 
   useEffect(() => {
@@ -187,7 +231,32 @@ export function UsagePage() {
     }
   }, [timeRange]);
 
-  const nowMs = lastRefreshedAt?.getTime() ?? 0;
+  useEffect(() => {
+    if (!needsAuthFileMap || authFilesLoaded) {
+      return;
+    }
+
+    let cancelled = false;
+    authFilesApi
+      .list()
+      .then((res) => {
+        if (cancelled) {
+          return;
+        }
+        const files = Array.isArray(res) ? res : (res as { files?: AuthFileItem[] })?.files;
+        setAuthFileMap(buildAuthFileMap(files));
+        setAuthFilesLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAuthFilesLoaded(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authFilesLoaded, needsAuthFileMap]);
 
   // Sparklines hook
   const {
@@ -196,7 +265,7 @@ export function UsagePage() {
     rpmSparkline,
     tpmSparkline,
     costSparkline
-  } = useSparklines({ usage: filteredUsage, loading, nowMs });
+  } = useSparklines({ usageDetails: filteredUsageDetails, loading, nowMs });
 
   // Chart data hook
   const {
@@ -213,12 +282,14 @@ export function UsagePage() {
   // Derived data
   const modelNames = useMemo(() => getModelNamesFromUsage(usage), [usage]);
   const apiStats = useMemo(
-    () => getApiStats(filteredUsage, modelPrices),
-    [filteredUsage, modelPrices]
+    () =>
+      expandedSections.apiModelBreakdown ? getApiStats(filteredUsage, modelPrices) : [],
+    [expandedSections.apiModelBreakdown, filteredUsage, modelPrices]
   );
   const modelStats = useMemo(
-    () => getModelStats(filteredUsage, modelPrices),
-    [filteredUsage, modelPrices]
+    () =>
+      expandedSections.apiModelBreakdown ? getModelStats(filteredUsage, modelPrices) : [],
+    [expandedSections.apiModelBreakdown, filteredUsage, modelPrices]
   );
   const hasPrices = Object.keys(modelPrices).length > 0;
 
@@ -293,6 +364,7 @@ export function UsagePage() {
       {/* Stats Overview Cards */}
       <StatCards
         usage={filteredUsage}
+        usageDetails={filteredUsageDetails}
         loading={loading}
         modelPrices={modelPrices}
         nowMs={nowMs}
@@ -314,7 +386,7 @@ export function UsagePage() {
       />
 
       {/* Service Health */}
-      <ServiceHealthCard usage={usage} loading={loading} />
+      <ServiceHealthCard usageDetails={fullUsageDetails} loading={loading} />
 
       {/* Charts Grid */}
       <div className={styles.chartsGrid}>
@@ -359,39 +431,66 @@ export function UsagePage() {
         hourWindowHours={hourWindowHours}
       />
 
-      {/* Details Grid */}
-      <div className={styles.detailsGrid}>
-        <ApiDetailsCard apiStats={apiStats} loading={loading} hasPrices={hasPrices} />
-        <ModelStatsCard modelStats={modelStats} loading={loading} hasPrices={hasPrices} />
-      </div>
+      <ExpandableUsageSection
+        title={t('usage_stats.breakdown_panel_title')}
+        hint={t('usage_stats.expand_on_demand_hint')}
+        expanded={expandedSections.apiModelBreakdown}
+        onToggle={() => toggleSection('apiModelBreakdown')}
+      >
+        <div className={styles.detailsGrid}>
+          <ApiDetailsCard apiStats={apiStats} loading={loading} hasPrices={hasPrices} />
+          <ModelStatsCard modelStats={modelStats} loading={loading} hasPrices={hasPrices} />
+        </div>
+      </ExpandableUsageSection>
 
-      <RequestEventsDetailsCard
-        usage={filteredUsage}
-        loading={loading}
-        geminiKeys={config?.geminiApiKeys || []}
-        claudeConfigs={config?.claudeApiKeys || []}
-        codexConfigs={config?.codexApiKeys || []}
-        vertexConfigs={config?.vertexApiKeys || []}
-        openaiProviders={config?.openaiCompatibility || []}
-      />
+      <ExpandableUsageSection
+        title={t('usage_stats.request_events_title')}
+        hint={t('usage_stats.expand_on_demand_hint')}
+        expanded={expandedSections.requestEvents}
+        onToggle={() => toggleSection('requestEvents')}
+      >
+        <RequestEventsDetailsCard
+          usageDetails={filteredUsageDetails}
+          loading={loading}
+          authFileMap={authFileMap}
+          geminiKeys={config?.geminiApiKeys || []}
+          claudeConfigs={config?.claudeApiKeys || []}
+          codexConfigs={config?.codexApiKeys || []}
+          vertexConfigs={config?.vertexApiKeys || []}
+          openaiProviders={config?.openaiCompatibility || []}
+        />
+      </ExpandableUsageSection>
 
-      {/* Credential Stats */}
-      <CredentialStatsCard
-        usage={filteredUsage}
-        loading={loading}
-        geminiKeys={config?.geminiApiKeys || []}
-        claudeConfigs={config?.claudeApiKeys || []}
-        codexConfigs={config?.codexApiKeys || []}
-        vertexConfigs={config?.vertexApiKeys || []}
-        openaiProviders={config?.openaiCompatibility || []}
-      />
+      <ExpandableUsageSection
+        title={t('usage_stats.credential_stats')}
+        hint={t('usage_stats.expand_on_demand_hint')}
+        expanded={expandedSections.credentialStats}
+        onToggle={() => toggleSection('credentialStats')}
+      >
+        <CredentialStatsCard
+          usageDetails={filteredUsageDetails}
+          loading={loading}
+          authFileMap={authFileMap}
+          geminiKeys={config?.geminiApiKeys || []}
+          claudeConfigs={config?.claudeApiKeys || []}
+          codexConfigs={config?.codexApiKeys || []}
+          vertexConfigs={config?.vertexApiKeys || []}
+          openaiProviders={config?.openaiCompatibility || []}
+        />
+      </ExpandableUsageSection>
 
-      {/* Price Settings */}
-      <PriceSettingsCard
-        modelNames={modelNames}
-        modelPrices={modelPrices}
-        onPricesChange={setModelPrices}
-      />
+      <ExpandableUsageSection
+        title={t('usage_stats.model_price_settings')}
+        hint={t('usage_stats.expand_on_demand_hint')}
+        expanded={expandedSections.priceSettings}
+        onToggle={() => toggleSection('priceSettings')}
+      >
+        <PriceSettingsCard
+          modelNames={modelNames}
+          modelPrices={modelPrices}
+          onPricesChange={setModelPrices}
+        />
+      </ExpandableUsageSection>
     </div>
   );
 }

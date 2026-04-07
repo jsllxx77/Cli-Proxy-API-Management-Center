@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { collectUsageDetails, extractTotalTokens } from '@/utils/usage';
-import type { UsagePayload } from './useUsageData';
+import { extractTotalTokens, type UsageDetail } from '@/utils/usage';
 
 export interface SparklineData {
   labels: string[];
@@ -22,7 +21,7 @@ export interface SparklineBundle {
 }
 
 export interface UseSparklinesOptions {
-  usage: UsagePayload | null;
+  usageDetails: UsageDetail[];
   loading: boolean;
   nowMs: number;
 }
@@ -35,14 +34,16 @@ export interface UseSparklinesReturn {
   costSparkline: SparklineBundle | null;
 }
 
-export function useSparklines({ usage, loading, nowMs }: UseSparklinesOptions): UseSparklinesReturn {
+export function useSparklines({
+  usageDetails,
+  loading,
+  nowMs
+}: UseSparklinesOptions): UseSparklinesReturn {
   const lastHourSeries = useMemo(() => {
-    if (!usage) return { labels: [], requests: [], tokens: [] };
     if (!Number.isFinite(nowMs) || nowMs <= 0) {
       return { labels: [], requests: [], tokens: [] };
     }
-    const details = collectUsageDetails(usage);
-    if (!details.length) return { labels: [], requests: [], tokens: [] };
+    if (!usageDetails.length) return { labels: [], requests: [], tokens: [] };
 
     const windowMinutes = 60;
     const now = nowMs;
@@ -50,7 +51,7 @@ export function useSparklines({ usage, loading, nowMs }: UseSparklinesOptions): 
     const requestBuckets = new Array(windowMinutes).fill(0);
     const tokenBuckets = new Array(windowMinutes).fill(0);
 
-    details.forEach((detail) => {
+    usageDetails.forEach((detail) => {
       const timestamp = detail.__timestampMs ?? 0;
       if (!Number.isFinite(timestamp) || timestamp < windowStart || timestamp > now) {
         return;
@@ -71,7 +72,7 @@ export function useSparklines({ usage, loading, nowMs }: UseSparklinesOptions): 
     });
 
     return { labels, requests: requestBuckets, tokens: tokenBuckets };
-  }, [nowMs, usage]);
+  }, [nowMs, usageDetails]);
 
   const buildSparkline = useCallback(
     (

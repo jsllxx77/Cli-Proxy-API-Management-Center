@@ -1,22 +1,20 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
 import {
-  collectUsageDetails,
   buildCandidateUsageSourceIds,
   formatCompactNumber,
-  normalizeAuthIndex
+  normalizeAuthIndex,
+  type UsageDetail
 } from '@/utils/usage';
-import { authFilesApi } from '@/services/api/authFiles';
 import type { GeminiKeyConfig, ProviderKeyConfig, OpenAIProviderConfig } from '@/types';
-import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
-import type { UsagePayload } from './hooks/useUsageData';
 import styles from '@/pages/UsagePage.module.scss';
 
 export interface CredentialStatsCardProps {
-  usage: UsagePayload | null;
+  usageDetails: UsageDetail[];
   loading: boolean;
+  authFileMap: Map<string, CredentialInfo>;
   geminiKeys: GeminiKeyConfig[];
   claudeConfigs: ProviderKeyConfig[];
   codexConfigs: ProviderKeyConfig[];
@@ -40,8 +38,9 @@ interface CredentialBucket {
 }
 
 export function CredentialStatsCard({
-  usage,
+  usageDetails,
   loading,
+  authFileMap,
   geminiKeys,
   claudeConfigs,
   codexConfigs,
@@ -49,39 +48,11 @@ export function CredentialStatsCard({
   openaiProviders,
 }: CredentialStatsCardProps) {
   const { t } = useTranslation();
-  const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
-
-  // Fetch auth files for auth_index-based matching
-  useEffect(() => {
-    let cancelled = false;
-    authFilesApi
-      .list()
-      .then((res) => {
-        if (cancelled) return;
-        const files = Array.isArray(res) ? res : (res as { files?: AuthFileItem[] })?.files;
-        if (!Array.isArray(files)) return;
-        const map = new Map<string, CredentialInfo>();
-        files.forEach((file) => {
-          const rawAuthIndex = file['auth_index'] ?? file.authIndex;
-          const key = normalizeAuthIndex(rawAuthIndex);
-          if (key) {
-            map.set(key, {
-              name: file.name || key,
-              type: (file.type || file.provider || '').toString(),
-            });
-          }
-        });
-        setAuthFileMap(map);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   // Aggregate rows: all from bySource only (no separate byAuthIndex rows to avoid duplicates).
   // Auth files are used purely for name resolution of unmatched source IDs.
   const rows = useMemo((): CredentialRow[] => {
-    if (!usage) return [];
-    const details = collectUsageDetails(usage);
+    if (!usageDetails.length) return [];
     const bySource: Record<string, CredentialBucket> = {};
     const result: CredentialRow[] = [];
     const consumedSourceIds = new Set<string>();
@@ -90,7 +61,7 @@ export function CredentialStatsCard({
     const sourceToAuthFile = new Map<string, CredentialInfo>();
     const fallbackByAuthIndex = new Map<string, CredentialBucket>();
 
-    details.forEach((detail) => {
+    usageDetails.forEach((detail) => {
       const authIdx = normalizeAuthIndex(detail.auth_index);
       const source = detail.source;
       const isFailed = detail.failed === true;
@@ -267,7 +238,7 @@ export function CredentialStatsCard({
     });
 
     return result.sort((a, b) => b.total - a.total);
-  }, [usage, geminiKeys, claudeConfigs, codexConfigs, vertexConfigs, openaiProviders, authFileMap]);
+  }, [usageDetails, geminiKeys, claudeConfigs, codexConfigs, vertexConfigs, openaiProviders, authFileMap]);
 
   return (
     <Card title={t('usage_stats.credential_stats')} className={styles.detailsFixedCard}>

@@ -1,18 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Select } from '@/components/ui/Select';
-import { authFilesApi } from '@/services/api/authFiles';
 import type { GeminiKeyConfig, ProviderKeyConfig, OpenAIProviderConfig } from '@/types';
-import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
 import {
-  collectUsageDetails,
   extractTotalTokens,
-  normalizeAuthIndex
+  type UsageDetail
 } from '@/utils/usage';
 import { downloadBlob } from '@/utils/download';
 import styles from '@/pages/UsagePage.module.scss';
@@ -39,8 +36,9 @@ type RequestEventRow = {
 };
 
 export interface RequestEventsDetailsCardProps {
-  usage: unknown;
+  usageDetails: UsageDetail[];
   loading: boolean;
+  authFileMap: Map<string, CredentialInfo>;
   geminiKeys: GeminiKeyConfig[];
   claudeConfigs: ProviderKeyConfig[];
   codexConfigs: ProviderKeyConfig[];
@@ -62,8 +60,9 @@ const encodeCsv = (value: string | number): string => {
 };
 
 export function RequestEventsDetailsCard({
-  usage,
+  usageDetails,
   loading,
+  authFileMap,
   geminiKeys,
   claudeConfigs,
   codexConfigs,
@@ -75,32 +74,6 @@ export function RequestEventsDetailsCard({
   const [modelFilter, setModelFilter] = useState(ALL_FILTER);
   const [sourceFilter, setSourceFilter] = useState(ALL_FILTER);
   const [authIndexFilter, setAuthIndexFilter] = useState(ALL_FILTER);
-  const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
-
-  useEffect(() => {
-    let cancelled = false;
-    authFilesApi
-      .list()
-      .then((res) => {
-        if (cancelled) return;
-        const files = Array.isArray(res) ? res : (res as { files?: AuthFileItem[] })?.files;
-        if (!Array.isArray(files)) return;
-        const map = new Map<string, CredentialInfo>();
-        files.forEach((file) => {
-          const key = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
-          if (!key) return;
-          map.set(key, {
-            name: file.name || key,
-            type: (file.type || file.provider || '').toString()
-          });
-        });
-        setAuthFileMap(map);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const sourceInfoMap = useMemo(
     () =>
@@ -115,9 +88,7 @@ export function RequestEventsDetailsCard({
   );
 
   const rows = useMemo<RequestEventRow[]>(() => {
-    const details = collectUsageDetails(usage);
-
-    return details
+    return usageDetails
       .map((detail, index) => {
         const timestamp = detail.timestamp;
         const timestampMs =
@@ -166,7 +137,7 @@ export function RequestEventsDetailsCard({
         };
       })
       .sort((a, b) => b.timestampMs - a.timestampMs);
-  }, [authFileMap, i18n.language, sourceInfoMap, usage]);
+  }, [authFileMap, i18n.language, sourceInfoMap, usageDetails]);
 
   const modelOptions = useMemo(
     () => [
