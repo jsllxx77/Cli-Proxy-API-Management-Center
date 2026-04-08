@@ -1034,6 +1034,12 @@
     "request_events_no_result_desc": "Попробуйте другие фильтры или очистите текущие.",
     "request_events_count": "{{count}} событий",
     "request_events_limit_hint": "Показано {{shown}} из {{total}} событий для стабильной производительности.",
+    "request_events_page_size": "Строк на страницу",
+    "request_events_page_size_option": "{{size}} строк/стр.",
+    "request_events_page_label": "Страница {{page}} / {{totalPages}}",
+    "request_events_page_range": "Показано {{start}}-{{end}} из {{total}}",
+    "request_events_prev_page": "Назад",
+    "request_events_next_page": "Далее",
     "input_tokens": "Входные токены",
     "output_tokens": "Выходные токены",
     "last_updated": "Обновлено"

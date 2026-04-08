@@ -1031,6 +1031,12 @@
     "request_events_no_result_desc": "Try different filters or clear the current filters.",
     "request_events_count": "{{count}} events",
     "request_events_limit_hint": "Showing {{shown}} of {{total}} events to keep rendering responsive.",
+    "request_events_page_size": "Rows per page",
+    "request_events_page_size_option": "{{size}} rows/page",
+    "request_events_page_label": "Page {{page}} / {{totalPages}}",
+    "request_events_page_range": "Showing {{start}}-{{end}} of {{total}}",
+    "request_events_prev_page": "Previous",
+    "request_events_next_page": "Next",
     "input_tokens": "Input Tokens",
     "output_tokens": "Output Tokens",
     "last_updated": "Updated"

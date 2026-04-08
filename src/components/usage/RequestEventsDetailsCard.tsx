@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -12,10 +12,12 @@ import {
   type UsageDetail
 } from '@/utils/usage';
 import { downloadBlob } from '@/utils/download';
+import { paginateRequestEventRows } from './requestEventsPagination';
 import styles from '@/pages/UsagePage.module.scss';
 
 const ALL_FILTER = '__all__';
-const MAX_RENDERED_EVENTS = 500;
+const DEFAULT_PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 
 type RequestEventRow = {
   id: string;
@@ -74,6 +76,8 @@ export function RequestEventsDetailsCard({
   const [modelFilter, setModelFilter] = useState(ALL_FILTER);
   const [sourceFilter, setSourceFilter] = useState(ALL_FILTER);
   const [authIndexFilter, setAuthIndexFilter] = useState(ALL_FILTER);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
 
   const sourceInfoMap = useMemo(
     () =>
@@ -203,10 +207,29 @@ export function RequestEventsDetailsCard({
     [effectiveAuthIndexFilter, effectiveModelFilter, effectiveSourceFilter, rows]
   );
 
-  const renderedRows = useMemo(
-    () => filteredRows.slice(0, MAX_RENDERED_EVENTS),
-    [filteredRows]
+  const pagination = useMemo(
+    () => paginateRequestEventRows(filteredRows, currentPage, pageSize),
+    [currentPage, filteredRows, pageSize]
   );
+
+  const pageSizeOptions = useMemo(
+    () =>
+      PAGE_SIZE_OPTIONS.map((value) => ({
+        value: String(value),
+        label: t('usage_stats.request_events_page_size_option', { size: value })
+      })),
+    [t]
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [effectiveAuthIndexFilter, effectiveModelFilter, effectiveSourceFilter, pageSize]);
+
+  useEffect(() => {
+    if (currentPage !== pagination.page) {
+      setCurrentPage(pagination.page);
+    }
+  }, [currentPage, pagination.page]);
 
   const hasActiveFilters =
     effectiveModelFilter !== ALL_FILTER ||
@@ -379,14 +402,60 @@ export function RequestEventsDetailsCard({
         <>
           <div className={styles.requestEventsMeta}>
             <span>{t('usage_stats.request_events_count', { count: filteredRows.length })}</span>
-            {filteredRows.length > MAX_RENDERED_EVENTS && (
-              <span className={styles.requestEventsLimitHint}>
-                {t('usage_stats.request_events_limit_hint', {
-                  shown: MAX_RENDERED_EVENTS,
-                  total: filteredRows.length
+            <div className={styles.requestEventsPaginationSummary}>
+              <span>
+                {t('usage_stats.request_events_page_label', {
+                  page: pagination.page,
+                  totalPages: pagination.totalPages
                 })}
               </span>
-            )}
+              <span>
+                {t('usage_stats.request_events_page_range', {
+                  start: pagination.totalRows === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1,
+                  end:
+                    pagination.totalRows === 0
+                      ? 0
+                      : Math.min(pagination.page * pagination.pageSize, pagination.totalRows),
+                  total: pagination.totalRows
+                })}
+              </span>
+            </div>
+          </div>
+
+          <div className={styles.requestEventsPaginationBar}>
+            <div className={styles.requestEventsPageSizeGroup}>
+              <span className={styles.requestEventsFilterLabel}>
+                {t('usage_stats.request_events_page_size')}
+              </span>
+              <Select
+                value={String(pageSize)}
+                options={pageSizeOptions}
+                onChange={(value) => setPageSize(Number(value))}
+                className={styles.requestEventsPageSizeSelect}
+                ariaLabel={t('usage_stats.request_events_page_size')}
+                fullWidth={false}
+              />
+            </div>
+            <div className={styles.requestEventsPaginationActions}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={pagination.page <= 1}
+              >
+                {t('usage_stats.request_events_prev_page')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  setCurrentPage((page) => Math.min(pagination.totalPages, page + 1))
+                }
+                disabled={pagination.page >= pagination.totalPages}
+              >
+                {t('usage_stats.request_events_next_page')}
+              </Button>
+            </div>
           </div>
 
           <div className={styles.requestEventsTableWrapper}>
@@ -406,7 +475,7 @@ export function RequestEventsDetailsCard({
                 </tr>
               </thead>
               <tbody>
-                {renderedRows.map((row) => (
+                {pagination.rows.map((row) => (
                   <tr key={row.id}>
                     <td title={row.timestamp} className={styles.requestEventsTimestamp}>
                       {row.timestampLabel}
