@@ -1,23 +1,44 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  IconKey,
-  IconBot,
-  IconFileText,
-  IconSatellite
-} from '@/components/ui/icons';
+  Activity,
+  Bot,
+  CheckCircle2,
+  Clock,
+  FileText,
+  KeyRound,
+  RefreshCw,
+  Route,
+  Satellite,
+  Server,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
+import { Badge } from '@/components/shadcn/ui/badge';
+import { Button } from '@/components/shadcn/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/shadcn/ui/card';
+import { apiKeysApi, authFilesApi, providersApi } from '@/services/api';
 import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
-import { apiKeysApi, providersApi, authFilesApi } from '@/services/api';
-import styles from './DashboardPage.module.scss';
+import { cn } from '@/lib/utils';
 
 interface QuickStat {
   label: string;
   value: number | string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   path: string;
   loading?: boolean;
   sublabel?: string;
+  tone: 'neutral' | 'success' | 'warning';
 }
 
 interface ProviderStats {
@@ -37,6 +58,143 @@ function getTimeOfDay(): TimeOfDay {
   return 'night';
 }
 
+const providerColors = ['#2563eb', '#10b981', '#8b5cf6', '#f59e0b'];
+
+const LoadingValue = () => (
+  <span className="inline-flex items-center gap-1 text-muted-foreground">
+    <RefreshCw className="size-4 animate-spin" />
+    ...
+  </span>
+);
+
+function OverviewCard({ stat }: { stat: QuickStat }) {
+  return (
+    <Link to={stat.path} className="block focus:outline-none focus:ring-2 focus:ring-ring">
+      <Card className="h-full rounded-md shadow-sm transition-colors hover:border-ring/60 hover:bg-accent/30">
+        <CardContent className="flex min-h-[164px] flex-col justify-between p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="grid size-10 place-items-center rounded-md border bg-muted text-foreground">
+              {stat.icon}
+            </div>
+            <Badge
+              variant={
+                stat.tone === 'success' ? 'success' : stat.tone === 'warning' ? 'warning' : 'outline'
+              }
+              className="rounded-full"
+            >
+              {stat.loading ? 'Loading' : 'Ready'}
+            </Badge>
+          </div>
+          <div className="min-w-0">
+            <div className="text-3xl font-semibold leading-none tracking-normal text-foreground">
+              {stat.loading ? <LoadingValue /> : stat.value}
+            </div>
+            <div className="mt-3 text-sm font-medium text-foreground">{stat.label}</div>
+            {stat.sublabel && (
+              <div className="mt-1 truncate text-xs text-muted-foreground">{stat.sublabel}</div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function ProviderBars({
+  rows,
+  loading,
+  emptyText,
+}: {
+  rows: Array<{ label: string; value: number | null; color: string }>;
+  loading: boolean;
+  emptyText: string;
+}) {
+  const readyRows = rows.filter((row) => row.value !== null);
+  const maxValue = Math.max(...readyRows.map((row) => row.value ?? 0), 1);
+
+  if (loading && readyRows.length === 0) {
+    return (
+      <div className="space-y-4">
+        {[0, 1, 2, 3].map((index) => (
+          <div key={index} className="space-y-2">
+            <div className="h-4 w-28 rounded bg-muted" />
+            <div className="h-9 rounded-md border bg-muted/50" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (readyRows.length === 0) {
+    return <div className="rounded-md border border-dashed bg-muted/30 p-6 text-sm text-muted-foreground">{emptyText}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {rows.map((row, index) => {
+        const value = row.value ?? 0;
+        return (
+          <div key={row.label} className="space-y-2">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="size-2.5 shrink-0 rounded-sm"
+                  style={{ background: row.color }}
+                />
+                <span className="truncate font-medium">{row.label}</span>
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">{row.value ?? '-'}</span>
+            </div>
+            <div className="h-9 rounded-md border bg-muted/35 p-1">
+              <div
+                className="flex h-full min-w-8 items-center justify-end rounded-sm px-2 text-[11px] font-medium text-white"
+                style={{
+                  width: `${Math.max(8, (value / maxValue) * 100)}%`,
+                  background: providerColors[index % providerColors.length],
+                }}
+              >
+                {value}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConfigBadge({
+  icon,
+  label,
+  value,
+  state = 'neutral',
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string | number;
+  state?: 'neutral' | 'on' | 'off';
+}) {
+  return (
+    <div className="flex min-h-12 items-center gap-3 rounded-md border bg-card px-3 py-2">
+      <div className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-xs text-muted-foreground">{label}</div>
+        <div
+          className={cn(
+            'truncate text-sm font-medium',
+            state === 'on' && 'text-emerald-700',
+            state === 'off' && 'text-muted-foreground'
+          )}
+        >
+          {value}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
@@ -54,29 +212,25 @@ export function DashboardPage() {
     authFiles: number | null;
   }>({
     apiKeys: null,
-    authFiles: null
+    authFiles: null,
   });
 
   const [providerStats, setProviderStats] = useState<ProviderStats>({
     gemini: null,
     codex: null,
     claude: null,
-    openai: null
+    openai: null,
   });
 
   const [loading, setLoading] = useState(true);
-
-  // Time-of-day state for dynamic greeting
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>(getTimeOfDay);
   const [currentTime, setCurrentTime] = useState(() => new Date());
-
   const apiKeysCache = useRef<string[]>([]);
 
   useEffect(() => {
     apiKeysCache.current = [];
   }, [apiBase, config?.apiKeys]);
 
-  // Update time every 60 seconds
   useEffect(() => {
     const id = setInterval(() => {
       setTimeOfDay(getTimeOfDay());
@@ -143,7 +297,7 @@ export function DashboardPage() {
       const primaryKey = apiKeys[0];
       await fetchModelsFromStore(apiBase, primaryKey);
     } catch {
-      // Ignore model fetch errors on dashboard
+      // Dashboard should stay readable even when model probing is unavailable.
     }
   }, [connectionStatus, apiBase, resolveApiKeysForModels, fetchModelsFromStore]);
 
@@ -151,25 +305,26 @@ export function DashboardPage() {
     const fetchStats = async () => {
       setLoading(true);
       try {
-        const [keysRes, filesRes, geminiRes, codexRes, claudeRes, openaiRes] = await Promise.allSettled([
-          apiKeysApi.list(),
-          authFilesApi.list(),
-          providersApi.getGeminiKeys(),
-          providersApi.getCodexConfigs(),
-          providersApi.getClaudeConfigs(),
-          providersApi.getOpenAIProviders()
-        ]);
+        const [keysRes, filesRes, geminiRes, codexRes, claudeRes, openaiRes] =
+          await Promise.allSettled([
+            apiKeysApi.list(),
+            authFilesApi.list(),
+            providersApi.getGeminiKeys(),
+            providersApi.getCodexConfigs(),
+            providersApi.getClaudeConfigs(),
+            providersApi.getOpenAIProviders(),
+          ]);
 
         setStats({
           apiKeys: keysRes.status === 'fulfilled' ? keysRes.value.length : null,
-          authFiles: filesRes.status === 'fulfilled' ? filesRes.value.files.length : null
+          authFiles: filesRes.status === 'fulfilled' ? filesRes.value.files.length : null,
         });
 
         setProviderStats({
           gemini: geminiRes.status === 'fulfilled' ? geminiRes.value.length : null,
           codex: codexRes.status === 'fulfilled' ? codexRes.value.length : null,
           claude: claudeRes.status === 'fulfilled' ? claudeRes.value.length : null,
-          openai: openaiRes.status === 'fulfilled' ? openaiRes.value.length : null
+          openai: openaiRes.status === 'fulfilled' ? openaiRes.value.length : null,
         });
       } finally {
         setLoading(false);
@@ -184,7 +339,6 @@ export function DashboardPage() {
     }
   }, [connectionStatus, fetchModels]);
 
-  // Calculate total provider keys only when all provider stats are available.
   const providerStatsReady =
     providerStats.gemini !== null &&
     providerStats.codex !== null &&
@@ -206,42 +360,46 @@ export function DashboardPage() {
     {
       label: t('dashboard.management_keys'),
       value: stats.apiKeys ?? '-',
-      icon: <IconKey size={24} />,
+      icon: <KeyRound className="size-5" />,
       path: '/config',
       loading: loading && stats.apiKeys === null,
-      sublabel: t('nav.config_management')
+      sublabel: t('nav.config_management'),
+      tone: 'neutral',
     },
     {
       label: t('nav.ai_providers'),
       value: loading ? '-' : providerStatsReady ? totalProviderKeys : '-',
-      icon: <IconBot size={24} />,
+      icon: <Bot className="size-5" />,
       path: '/ai-providers',
-      loading: loading,
+      loading,
       sublabel: hasProviderStats
         ? t('dashboard.provider_keys_detail', {
             gemini: providerStats.gemini ?? '-',
             codex: providerStats.codex ?? '-',
             claude: providerStats.claude ?? '-',
-            openai: providerStats.openai ?? '-'
+            openai: providerStats.openai ?? '-',
           })
-        : undefined
+        : undefined,
+      tone: providerStatsReady ? 'success' : 'warning',
     },
     {
       label: t('nav.auth_files'),
       value: stats.authFiles ?? '-',
-      icon: <IconFileText size={24} />,
+      icon: <FileText className="size-5" />,
       path: '/auth-files',
       loading: loading && stats.authFiles === null,
-      sublabel: t('dashboard.oauth_credentials')
+      sublabel: t('dashboard.oauth_credentials'),
+      tone: 'neutral',
     },
     {
       label: t('dashboard.available_models'),
       value: modelsLoading ? '-' : models.length,
-      icon: <IconSatellite size={24} />,
+      icon: <Satellite className="size-5" />,
       path: '/system',
       loading: modelsLoading,
-      sublabel: t('dashboard.available_models_desc')
-    }
+      sublabel: t('dashboard.available_models_desc'),
+      tone: models.length > 0 ? 'success' : 'warning',
+    },
   ];
 
   const routingStrategyRaw = config?.routingStrategy?.trim() || '';
@@ -252,154 +410,245 @@ export function DashboardPage() {
       : routingStrategyRaw === 'fill-first'
         ? t('basic_settings.routing_strategy_fill_first')
         : routingStrategyRaw;
-  const routingStrategyBadgeClass = !routingStrategyRaw
-    ? styles.configBadgeUnknown
-    : routingStrategyRaw === 'round-robin'
-      ? styles.configBadgeRoundRobin
-      : routingStrategyRaw === 'fill-first'
-        ? styles.configBadgeFillFirst
-        : styles.configBadgeUnknown;
-
-  // Derived time-based values
-  const greetingKey = `dashboard.greeting_${timeOfDay}`;
-  const caringKey = `dashboard.caring_${timeOfDay}`;
 
   const formattedDate = currentTime.toLocaleDateString(i18n.language, {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
-    day: 'numeric'
+    day: 'numeric',
   });
 
   const formattedTime = currentTime.toLocaleTimeString(i18n.language, {
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   });
 
-  return (
-    <div className={styles.dashboard}>
-      {/* Decorative background orbs */}
-      <div className={styles.backgroundOrbs} aria-hidden="true">
-        <div className={styles.orb1} />
-        <div className={styles.orb2} />
-      </div>
+  const providerRows = [
+    { label: 'Gemini', value: providerStats.gemini, color: providerColors[0] },
+    { label: 'Codex', value: providerStats.codex, color: providerColors[1] },
+    { label: 'Claude', value: providerStats.claude, color: providerColors[2] },
+    { label: 'OpenAI', value: providerStats.openai, color: providerColors[3] },
+  ];
 
-      {/* Hero welcome section */}
-      <section className={styles.hero}>
-        <span className={styles.heroWatermark} aria-hidden="true">
-          OVERVIEW
-        </span>
-        <div className={styles.heroContent}>
-          <span className={styles.heroGreeting}>{t(greetingKey)}</span>
-          <h1 className={styles.heroTitle}>{t('dashboard.welcome_back')}</h1>
-          <p className={styles.heroCaring}>{t(caringKey)}</p>
+  const modelPreview = useMemo(() => models.slice(0, 8), [models]);
+  const getModelLabel = (model: (typeof models)[number]) => model.alias || model.name;
+  const greetingKey = `dashboard.greeting_${timeOfDay}`;
+  const caringKey = `dashboard.caring_${timeOfDay}`;
+  const connectionLabel = t(
+    connectionStatus === 'connected'
+      ? 'common.connected'
+      : connectionStatus === 'connecting'
+        ? 'common.connecting'
+        : 'common.disconnected'
+  );
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
+      <header className="flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span>{t('nav.dashboard')}</span>
+            <span>/</span>
+            <span>{t('dashboard.system_overview')}</span>
+            <Badge
+              variant={connectionStatus === 'connected' ? 'success' : 'warning'}
+              className="ml-1 rounded-full"
+            >
+              {connectionStatus === 'connected' ? (
+                <CheckCircle2 className="size-3.5" />
+              ) : (
+                <WifiOff className="size-3.5" />
+              )}
+              {connectionLabel}
+            </Badge>
+          </div>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <h1 className="text-3xl font-semibold leading-tight tracking-normal text-foreground md:text-4xl">
+              {t('dashboard.welcome_back')}
+            </h1>
+            <span className="pb-1 text-sm font-medium text-muted-foreground">
+              {t(greetingKey)}
+            </span>
+          </div>
+          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+            {t(caringKey)}
+          </p>
         </div>
-        <div className={styles.heroMeta}>
-          <div className={styles.dateTimeBlock}>
-            <span className={styles.time}>{formattedTime}</span>
-            <span className={styles.date}>{formattedDate}</span>
-          </div>
-          <div className={styles.connectionPill}>
-            <span
-              className={`${styles.statusDot} ${
-                connectionStatus === 'connected'
-                  ? styles.connected
-                  : connectionStatus === 'connecting'
-                    ? styles.connecting
-                    : styles.disconnected
-              }`}
-            />
-            <span className={styles.pillText}>
-              {serverVersion
-                ? `v${serverVersion.trim().replace(/^[vV]+/, '')}`
-                : t(
-                    connectionStatus === 'connected'
-                      ? 'common.connected'
-                      : connectionStatus === 'connecting'
-                        ? 'common.connecting'
-                        : 'common.disconnected'
-                  )}
-            </span>
-          </div>
+
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          <Badge variant="outline" className="rounded-full">
+            <Clock className="size-3.5" />
+            {formattedTime}
+          </Badge>
+          <Badge variant="outline" className="rounded-full">
+            {formattedDate}
+          </Badge>
+          <Badge variant="outline" className="rounded-full">
+            <Server className="size-3.5" />
+            {serverVersion ? `v${serverVersion.trim().replace(/^[vV]+/, '')}` : '-'}
+          </Badge>
           {serverBuildDate && (
-            <span className={styles.buildDate}>
+            <Badge variant="outline" className="rounded-full">
               {new Date(serverBuildDate).toLocaleDateString(i18n.language)}
-            </span>
+            </Badge>
           )}
         </div>
+      </header>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {quickStats.map((stat) => (
+          <OverviewCard key={stat.path} stat={stat} />
+        ))}
       </section>
 
-      {/* Bento stats grid */}
-      <section className={styles.statsSection}>
-        <h2 className={styles.sectionHeading}>{t('dashboard.system_overview')}</h2>
-        <div className={styles.bentoGrid}>
-          {quickStats.map((stat, index) => (
-            <Link
-              key={stat.path}
-              to={stat.path}
-              className={`${styles.bentoCard} ${index === 0 ? styles.bentoLarge : ''}`}
-              style={{ animationDelay: `${index * 80}ms` }}
-            >
-              <div className={styles.bentoIcon}>{stat.icon}</div>
-              <div className={styles.bentoContent}>
-                <span className={styles.bentoValue}>
-                  {stat.loading ? '...' : stat.value}
-                </span>
-                <span className={styles.bentoLabel}>{stat.label}</span>
-                {stat.sublabel && !stat.loading && (
-                  <span className={styles.bentoSublabel}>{stat.sublabel}</span>
-                )}
+      <section className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+        <Card className="rounded-md">
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>{t('nav.ai_providers')}</CardTitle>
+              <CardDescription>
+                {hasProviderStats
+                  ? t('dashboard.provider_keys_detail', {
+                      gemini: providerStats.gemini ?? '-',
+                      codex: providerStats.codex ?? '-',
+                      claude: providerStats.claude ?? '-',
+                      openai: providerStats.openai ?? '-',
+                    })
+                  : t('usage.empty_short', { defaultValue: '暂无数据' })}
+              </CardDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/ai-providers">
+                <Bot className="size-4" />
+                {t('nav.ai_providers')}
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <ProviderBars
+              rows={providerRows}
+              loading={loading}
+              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-md">
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>{t('dashboard.available_models')}</CardTitle>
+              <CardDescription>{t('dashboard.available_models_desc')}</CardDescription>
+            </div>
+            <Badge variant={models.length > 0 ? 'success' : 'warning'} className="w-fit rounded-full">
+              <Satellite className="size-3.5" />
+              {modelsLoading ? 'Loading' : models.length}
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            {modelsLoading ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {[0, 1, 2, 3, 4, 5].map((index) => (
+                  <div key={index} className="h-10 rounded-md border bg-muted/50" />
+                ))}
               </div>
-            </Link>
-          ))}
-        </div>
-      </section>
-
-      {/* Config pills section */}
-      {config && (
-        <section className={styles.configSection}>
-          <h2 className={styles.sectionHeading}>{t('dashboard.current_config')}</h2>
-          <div className={styles.configPillGrid}>
-            <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.debug_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.debug ? styles.on : styles.off}`}>
-                {config.debug ? t('common.yes') : t('common.no')}
-              </span>
-            </div>
-            <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.logging_to_file_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.loggingToFile ? styles.on : styles.off}`}>
-                {config.loggingToFile ? t('common.yes') : t('common.no')}
-              </span>
-            </div>
-            <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.retry_count_label')}</span>
-              <span className={styles.configPillValue}>{config.requestRetry ?? 0}</span>
-            </div>
-            <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.ws_auth_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.wsAuth ? styles.on : styles.off}`}>
-                {config.wsAuth ? t('common.yes') : t('common.no')}
-              </span>
-            </div>
-            <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('dashboard.routing_strategy')}</span>
-              <span className={`${styles.configBadge} ${routingStrategyBadgeClass}`}>
-                {routingStrategyDisplay}
-              </span>
-            </div>
-            {config.proxyUrl && (
-              <div className={`${styles.configPill} ${styles.configPillWide}`}>
-                <span className={styles.configPillLabel}>{t('basic_settings.proxy_url_label')}</span>
-                <span className={styles.configPillMono}>{config.proxyUrl}</span>
+            ) : modelPreview.length > 0 ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {modelPreview.map((model) => (
+                  <div
+                    key={model.name}
+                    className="flex min-h-10 items-center rounded-md border bg-card px-3 text-sm"
+                  >
+                    <span className="truncate font-mono text-xs text-muted-foreground">
+                      {getModelLabel(model)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed bg-muted/30 p-6 text-sm text-muted-foreground">
+                {t('usage.empty_short', { defaultValue: '暂无数据' })}
               </div>
             )}
-          </div>
-          <Link to="/config" className={styles.viewMoreLink}>
-            {t('dashboard.edit_settings')} →
-          </Link>
-        </section>
-      )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <Card className="rounded-md">
+          <CardHeader>
+            <CardTitle>{t('dashboard.current_config')}</CardTitle>
+            <CardDescription>{apiBase || 'CLI Proxy API'}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <ConfigBadge
+              icon={<Activity className="size-4" />}
+              label={t('basic_settings.debug_enable')}
+              value={config?.debug ? t('common.yes') : t('common.no')}
+              state={config?.debug ? 'on' : 'off'}
+            />
+            <ConfigBadge
+              icon={<ShieldCheck className="size-4" />}
+              label={t('basic_settings.logging_to_file_enable')}
+              value={config?.loggingToFile ? t('common.yes') : t('common.no')}
+              state={config?.loggingToFile ? 'on' : 'off'}
+            />
+            <ConfigBadge
+              icon={<RefreshCw className="size-4" />}
+              label={t('basic_settings.retry_count_label')}
+              value={config?.requestRetry ?? 0}
+            />
+            <ConfigBadge
+              icon={<Wifi className="size-4" />}
+              label={t('basic_settings.ws_auth_enable')}
+              value={config?.wsAuth ? t('common.yes') : t('common.no')}
+              state={config?.wsAuth ? 'on' : 'off'}
+            />
+            <ConfigBadge
+              icon={<Route className="size-4" />}
+              label={t('dashboard.routing_strategy')}
+              value={routingStrategyDisplay}
+            />
+            <ConfigBadge
+              icon={<SlidersHorizontal className="size-4" />}
+              label={t('nav.config_management')}
+              value={t('dashboard.edit_settings')}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-md">
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>{t('dashboard.system_overview')}</CardTitle>
+              <CardDescription>{connectionLabel}</CardDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/config">
+                <Settings2 className="size-4" />
+                {t('dashboard.edit_settings')}
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-md border bg-muted/25 p-4">
+                <div className="text-xs text-muted-foreground">{t('dashboard.management_keys')}</div>
+                <div className="mt-2 text-2xl font-semibold">{stats.apiKeys ?? '-'}</div>
+              </div>
+              <div className="rounded-md border bg-muted/25 p-4">
+                <div className="text-xs text-muted-foreground">{t('nav.auth_files')}</div>
+                <div className="mt-2 text-2xl font-semibold">{stats.authFiles ?? '-'}</div>
+              </div>
+              <div className="rounded-md border bg-muted/25 p-4">
+                <div className="text-xs text-muted-foreground">{t('nav.ai_providers')}</div>
+                <div className="mt-2 text-2xl font-semibold">
+                  {providerStatsReady ? totalProviderKeys : '-'}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
     </div>
   );
 }

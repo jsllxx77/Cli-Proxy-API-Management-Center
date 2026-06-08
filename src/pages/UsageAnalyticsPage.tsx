@@ -101,6 +101,14 @@ const formatTime = (timestampMs: number, locale: string) => {
 
 const compactLabel = (value: string, fallback = 'unknown') => value.trim() || fallback;
 
+const emptyBars = [
+  { label: 'Gemini', width: 78 },
+  { label: 'Codex', width: 62 },
+  { label: 'Claude', width: 46 },
+  { label: 'OpenAI', width: 34 },
+  { label: 'Other', width: 24 },
+];
+
 function MetricCard({
   title,
   value,
@@ -162,16 +170,101 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
   }));
 
   if (!chartData.length || !chartData.some((point) => point.requests > 0)) {
+    const width = 960;
+    const height = 320;
+    const padding = { top: 24, right: 24, bottom: 38, left: 58 };
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    const bottom = padding.top + plotHeight;
+    const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio, index) => ({
+      y: bottom - ratio * plotHeight,
+      label: index === 0 ? '0' : `${index * 25}%`,
+    }));
+    const previewPoints = [
+      [padding.left, bottom - plotHeight * 0.18],
+      [padding.left + plotWidth * 0.16, bottom - plotHeight * 0.28],
+      [padding.left + plotWidth * 0.3, bottom - plotHeight * 0.2],
+      [padding.left + plotWidth * 0.46, bottom - plotHeight * 0.42],
+      [padding.left + plotWidth * 0.62, bottom - plotHeight * 0.36],
+      [padding.left + plotWidth * 0.78, bottom - plotHeight * 0.54],
+      [padding.left + plotWidth, bottom - plotHeight * 0.44],
+    ]
+      .map(([x, y]) => `${x},${y}`)
+      .join(' ');
+
     return (
-      <div className="grid h-[360px] place-items-center rounded-lg border border-dashed bg-muted/30">
-        <div className="flex max-w-md items-center gap-4 px-6 text-left">
-          <div className="grid size-10 shrink-0 place-items-center rounded-full border bg-background text-muted-foreground">
-            <BarChart3 className="size-5" />
-          </div>
-          <div>
-            <div className="font-medium text-foreground">暂无统计数据</div>
-            <div className="mt-1 text-sm text-muted-foreground">
-              产生新的模型请求后，这里会显示实时 Token 和请求趋势。
+      <div className="relative h-[360px] w-full overflow-hidden rounded-md border bg-background">
+        <svg
+          className="h-full w-full"
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label="Token usage trend placeholder"
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <linearGradient id="tokenEmptyFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#2563eb" stopOpacity={0.18} />
+              <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <rect width={width} height={height} fill="var(--bg-primary)" />
+          {yTicks.map((tick) => (
+            <g key={tick.label}>
+              <line
+                x1={padding.left}
+                x2={padding.left + plotWidth}
+                y1={tick.y}
+                y2={tick.y}
+                stroke="var(--border-color)"
+                strokeDasharray="4 6"
+              />
+              <text
+                x={padding.left - 12}
+                y={tick.y + 4}
+                textAnchor="end"
+                fill="var(--text-tertiary)"
+                fontSize="12"
+              >
+                {tick.label}
+              </text>
+            </g>
+          ))}
+          <polygon
+            points={`${padding.left},${bottom} ${previewPoints} ${padding.left + plotWidth},${bottom}`}
+            fill="url(#tokenEmptyFill)"
+          />
+          <polyline
+            points={previewPoints}
+            fill="none"
+            stroke="#2563eb"
+            strokeWidth="3"
+            strokeDasharray="10 8"
+            strokeLinejoin="round"
+            opacity="0.72"
+          />
+          {[0, 1, 2, 3, 4, 5].map((index) => (
+            <text
+              key={index}
+              x={padding.left + (plotWidth * index) / 5}
+              y={height - 12}
+              textAnchor={index === 0 ? 'start' : index === 5 ? 'end' : 'middle'}
+              fill="var(--text-tertiary)"
+              fontSize="12"
+            >
+              {index === 0 ? 'now' : `-${(5 - index) * 10}m`}
+            </text>
+          ))}
+        </svg>
+        <div className="absolute inset-0 grid place-items-center">
+          <div className="flex max-w-md items-center gap-4 rounded-md border bg-card/95 p-5 text-left shadow-sm">
+            <div className="grid size-10 shrink-0 place-items-center rounded-md border bg-muted text-muted-foreground">
+              <BarChart3 className="size-5" />
+            </div>
+            <div>
+              <div className="font-medium text-foreground">暂无统计数据</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                产生新的模型请求后，这里会显示实时 Token 和请求趋势。
+              </div>
             </div>
           </div>
         </div>
@@ -200,7 +293,7 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
   }));
 
   return (
-    <div className="h-[360px] w-full overflow-hidden rounded-lg border bg-background">
+    <div className="h-[360px] w-full overflow-hidden rounded-md border bg-background">
       <svg
         className="h-full w-full"
         viewBox={`0 0 ${width} ${height}`}
@@ -291,7 +384,33 @@ function DistributionBars({
   const maxValue = Math.max(...rows.map((row) => row.value), 1);
 
   if (!rows.length) {
-    return <div className="py-8 text-sm text-muted-foreground">{emptyText}</div>;
+    return (
+      <div className="space-y-3">
+        {emptyBars.map((bar, index) => (
+          <div key={bar.label} className="space-y-2" aria-hidden="true">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="size-2.5 shrink-0 rounded-sm opacity-50"
+                  style={{ background: chartPalette[index % chartPalette.length] }}
+                />
+                <span className="truncate font-medium text-muted-foreground">{bar.label}</span>
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">0</span>
+            </div>
+            <div className="h-9 rounded-md border bg-muted/35 p-1">
+              <div
+                className="h-full rounded-sm bg-muted-foreground/20"
+                style={{ width: `${bar.width}%` }}
+              />
+            </div>
+          </div>
+        ))}
+        <div className="rounded-md border border-dashed bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          {emptyText}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -328,7 +447,29 @@ function LatencyList({ groups, emptyText }: { groups: UsageGroup[]; emptyText: s
   const maxLatency = Math.max(...groups.map((group) => group.avgLatencyMs), 1);
 
   if (!groups.length) {
-    return <div className="py-8 text-sm text-muted-foreground">{emptyText}</div>;
+    return (
+      <div className="space-y-4">
+        {emptyBars.slice(0, 4).map((bar) => (
+          <div key={bar.label} className="space-y-2" aria-hidden="true">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="h-4 w-32 rounded bg-muted" />
+                <div className="mt-2 h-3 w-24 rounded bg-muted/70" />
+              </div>
+              <Badge variant="outline" className="shrink-0 font-mono">
+                0ms
+              </Badge>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-muted-foreground/20" style={{ width: `${bar.width}%` }} />
+            </div>
+          </div>
+        ))}
+        <div className="rounded-md border border-dashed bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          {emptyText}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -370,11 +511,50 @@ function RecentEventsTable({
   onDownload: (event: UsageEvent) => void;
 }) {
   if (!events.length) {
-    return <div className="rounded-lg border border-dashed bg-muted/30 p-8 text-sm text-muted-foreground">{emptyText}</div>;
+    return (
+      <div className="overflow-hidden rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Time</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Provider / Model</TableHead>
+              <TableHead>Endpoint</TableHead>
+              <TableHead className="text-right">Tokens</TableHead>
+              <TableHead className="text-right">Latency</TableHead>
+              <TableHead className="w-[56px]" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {[0, 1, 2, 3, 4].map((index) => (
+              <TableRow key={index} aria-hidden="true">
+                <TableCell><div className="h-4 w-28 rounded bg-muted" /></TableCell>
+                <TableCell><div className="h-6 w-14 rounded-full bg-muted" /></TableCell>
+                <TableCell>
+                  <div className="space-y-2">
+                    <div className="h-4 w-36 rounded bg-muted" />
+                    <div className="h-3 w-24 rounded bg-muted/70" />
+                  </div>
+                </TableCell>
+                <TableCell><div className="h-4 w-32 rounded bg-muted" /></TableCell>
+                <TableCell><div className="ml-auto h-4 w-14 rounded bg-muted" /></TableCell>
+                <TableCell><div className="ml-auto h-4 w-16 rounded bg-muted" /></TableCell>
+                <TableCell />
+              </TableRow>
+            ))}
+            <TableRow>
+              <TableCell colSpan={7} className="bg-muted/25 py-5 text-center text-sm text-muted-foreground">
+                {emptyText}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+    );
   }
 
   return (
-    <div className="rounded-lg border">
+    <div className="overflow-hidden rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
@@ -574,7 +754,7 @@ export function UsageAnalyticsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
-      <header className="flex flex-col gap-4 rounded-lg border bg-card p-6 shadow-sm lg:flex-row lg:items-start lg:justify-between">
+      <header className="flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>{t('nav.dashboard')}</span>
@@ -695,7 +875,7 @@ export function UsageAnalyticsPage() {
         />
       </section>
 
-      <Card className="rounded-lg">
+      <Card className="rounded-md">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>{t('usage.token_curve', { defaultValue: 'Token 曲线' })}</CardTitle>
@@ -716,20 +896,20 @@ export function UsageAnalyticsPage() {
       </Card>
 
       <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card className="rounded-lg">
+        <Card className="rounded-md">
           <CardHeader>
             <CardTitle>{t('usage.model_distribution', { defaultValue: '模型调用分布' })}</CardTitle>
-            <CardDescription>Models ranked by request volume from the local usage queue.</CardDescription>
+            <CardDescription>按本地队列中的请求量聚合模型调用。</CardDescription>
           </CardHeader>
           <CardContent>
             <DistributionBars groups={modelDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
           </CardContent>
         </Card>
 
-        <Card className="rounded-lg">
+        <Card className="rounded-md">
           <CardHeader>
             <CardTitle>{t('usage.latency_ranking', { defaultValue: '延迟排行' })}</CardTitle>
-            <CardDescription>Average latency grouped by provider and model.</CardDescription>
+            <CardDescription>按 Provider 与模型聚合平均延迟。</CardDescription>
           </CardHeader>
           <CardContent>
             <LatencyList groups={latencyRanking} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
@@ -738,19 +918,19 @@ export function UsageAnalyticsPage() {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <Card className="rounded-lg">
+        <Card className="rounded-md">
           <CardHeader>
             <CardTitle>{t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}</CardTitle>
-            <CardDescription>Requests grouped by upstream provider.</CardDescription>
+            <CardDescription>按上游 Provider 聚合请求。</CardDescription>
           </CardHeader>
           <CardContent>
             <DistributionBars groups={providerDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
           </CardContent>
         </Card>
-        <Card className="rounded-lg">
+        <Card className="rounded-md">
           <CardHeader>
             <CardTitle>{t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}</CardTitle>
-            <CardDescription>Requests grouped by API endpoint.</CardDescription>
+            <CardDescription>按 API Endpoint 聚合请求。</CardDescription>
           </CardHeader>
           <CardContent>
             <DistributionBars groups={endpointDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
@@ -758,7 +938,7 @@ export function UsageAnalyticsPage() {
         </Card>
       </section>
 
-      <Card className="rounded-lg">
+      <Card className="rounded-md">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>{t('usage.recent_requests', { defaultValue: '最近请求' })}</CardTitle>
