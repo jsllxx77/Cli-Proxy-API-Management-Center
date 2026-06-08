@@ -1,0 +1,568 @@
+@use '../styles/mixins' as *;
+
+.usagePage {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+  width: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: $spacing-lg;
+
+  h1 {
+    margin: 4px 0 0;
+    color: var(--text-primary);
+    font-size: 30px;
+    line-height: 1.15;
+    font-weight: 760;
+  }
+
+  @include mobile {
+    flex-direction: column;
+    gap: $spacing-md;
+  }
+}
+
+.breadcrumb {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: $spacing-sm;
+  flex-wrap: wrap;
+
+  @include mobile {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+.switchLabel,
+.buttonContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  svg {
+    flex: 0 0 auto;
+  }
+}
+
+.rangeBar {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+
+  @include mobile {
+    width: 100%;
+    overflow-x: auto;
+  }
+}
+
+.rangeButton {
+  @include button-reset;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: $radius-sm;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+
+  &:hover {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  }
+}
+
+.rangeButtonActive {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+
+.analyticsShell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: $spacing-lg;
+  align-items: start;
+  min-height: 0;
+
+  @include tablet {
+    grid-template-columns: 1fr;
+  }
+}
+
+.insightRail {
+  position: sticky;
+  top: calc(var(--header-height, 72px) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  padding: $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  min-width: 0;
+
+  @include tablet {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.railBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+
+  strong {
+    color: var(--text-primary);
+    font-size: 24px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.railLabel {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.railHint {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: $radius-full;
+  font-size: 12px;
+  font-weight: 750;
+  border: 1px solid var(--border-color);
+}
+
+.statusOk {
+  color: var(--success-badge-text);
+  background: var(--success-badge-bg);
+  border-color: var(--success-badge-border);
+}
+
+.statusWarning {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+}
+
+.providerStack {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.providerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-sm;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    flex: 0 0 auto;
+    font-size: 13px;
+  }
+}
+
+.contentPanel {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+  min-width: 0;
+}
+
+.errorBanner {
+  padding: 10px 12px;
+  border-radius: $radius-md;
+  border: 1px solid var(--error-color);
+  background: rgba($error-color, 0.1);
+  color: var(--error-color);
+  font-size: 13px;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: $spacing-md;
+
+  @include tablet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metricTile {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: $spacing-md;
+  align-items: start;
+  min-height: 122px;
+  padding: $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+}
+
+.metricIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: $radius-md;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.tonesuccess .metricIcon {
+  color: var(--success-badge-text);
+  background: var(--success-badge-bg);
+}
+
+.tonewarning .metricIcon {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+
+.tonedanger .metricIcon {
+  color: var(--failure-badge-text);
+  background: var(--failure-badge-bg);
+}
+
+.metricText {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.metricLabel {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.metricValue {
+  color: var(--text-primary);
+  font-size: 28px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metricDetail {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.panel {
+  min-width: 0;
+  padding: $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: $spacing-md;
+  margin-bottom: $spacing-md;
+
+  h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 16px;
+    line-height: 1.25;
+  }
+
+  span {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+}
+
+.chartPanel {
+  overflow: hidden;
+}
+
+.tokenChart {
+  display: block;
+  width: 100%;
+  height: 260px;
+  overflow: visible;
+}
+
+.chartGridLine {
+  stroke: var(--border-color);
+  stroke-width: 1;
+}
+
+.chartAxisLabel,
+.chartBottomLabel {
+  fill: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chartAxisLabel {
+  text-anchor: end;
+}
+
+.chartArea {
+  fill: color-mix(in srgb, #0891b2 18%, transparent);
+}
+
+.chartLine {
+  fill: none;
+  stroke: #0891b2;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chartPoint {
+  fill: var(--bg-primary);
+  stroke: #0891b2;
+  stroke-width: 2;
+}
+
+.twoColumnGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: $spacing-lg;
+
+  @include tablet {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mutedState {
+  padding: $spacing-md;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.rankingList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rankRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: $spacing-md;
+  align-items: center;
+
+  @include mobile {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+.rankMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.rankLabel {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rankSub {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.rankMeasure {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-end;
+  min-width: 0;
+
+  span {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+  }
+
+  @include mobile {
+    align-items: stretch;
+  }
+}
+
+.rankTrack {
+  width: 100%;
+  height: 7px;
+  border-radius: $radius-full;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.rankFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0891b2, #10b981);
+}
+
+.cleanState {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: $spacing-md;
+  color: var(--success-badge-text);
+  background: var(--success-badge-bg);
+  border: 1px solid var(--success-badge-border);
+  border-radius: $radius-md;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.failureTableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+}
+
+.failureTable {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+
+  th,
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  td {
+    color: var(--text-secondary);
+  }
+
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+}
+
+.statusCode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--failure-badge-text);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.tableMainCell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+
+  strong {
+    color: var(--text-primary);
+  }
+
+  span {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.requestId {
+  display: inline-block;
+  max-width: 150px;
+  color: #0891b2;
+  font-family: $font-mono;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failBody {
+  display: inline-block;
+  max-width: 330px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
