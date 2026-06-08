@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -31,9 +31,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/shadcn/ui/table';
-import { apiKeysApi, authFilesApi, providersApi } from '@/services/api';
+import { apiKeysApi, authFilesApi, providersApi, usageApi } from '@/services/api';
 import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
 import { cn } from '@/lib/utils';
+import {
+  buildTokenSeries,
+  filterUsageEventsByRange,
+  formatCompactNumber,
+  normalizeUsageEvents,
+  summarizeUsageEvents,
+  type TokenSeriesPoint,
+  type UsageEvent,
+  type UsageTimeRange,
+} from '@/utils/usageAnalytics';
 
 interface QuickStat {
   label: string;
@@ -53,6 +63,20 @@ interface ProviderStats {
 }
 
 const providerColors = ['#111111', '#737373', '#a3a3a3', '#d4d4d4'];
+const tokenTrendRanges: Array<{ value: UsageTimeRange; label: string }> = [
+  { value: '15m', label: '15 分钟' },
+  { value: '1h', label: '1 小时' },
+  { value: '6h', label: '6 小时' },
+  { value: '24h', label: '24 小时' },
+];
+
+const trimTrailingEmptyTokenBuckets = (series: TokenSeriesPoint[]) => {
+  let end = series.length;
+  while (end > 1 && series[end - 1].requests === 0 && series[end - 1].totalTokens === 0) {
+    end -= 1;
+  }
+  return series.slice(0, end);
+};
 
 const normalizeApiKeyList = (input: unknown): string[] => {
   if (!Array.isArray(input)) return [];
@@ -111,56 +135,103 @@ function SectionCard({ stat }: { stat: QuickStat }) {
   );
 }
 
-function DashboardAreaChart({ values }: { values: number[] }) {
+function TokenTrendChart({
+  data,
+  loading,
+}: {
+  data: TokenSeriesPoint[];
+  loading: boolean;
+}) {
   const width = 1080;
   const height = 360;
-  const padding = { top: 26, right: 22, bottom: 28, left: 34 };
+  const padding = { top: 30, right: 24, bottom: 40, left: 58 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const bottom = padding.top + plotHeight;
-  const normalizedValues = values.length ? values : [8, 16, 11, 28, 21, 38, 31, 46, 36, 58];
-  const max = Math.max(...normalizedValues, 1);
-  const pointFor = (value: number, index: number) => {
-    const x = padding.left + (plotWidth * index) / Math.max(1, normalizedValues.length - 1);
-    const y = bottom - (value / max) * plotHeight;
+  const hasData = data.some((point) => point.requests > 0 && point.totalTokens > 0);
+  const maxValue = Math.max(...data.map((point) => point.totalTokens), 1);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    y: bottom - ratio * plotHeight,
+    label: formatCompactNumber(maxValue * ratio),
+  }));
+  const pointFor = (value: number, index: number, length: number) => {
+    const x = padding.left + (plotWidth * index) / Math.max(1, length - 1);
+    const y = bottom - (value / maxValue) * plotHeight;
     return [x, y] as const;
   };
-  const upper = normalizedValues.map((value, index) => pointFor(value, index));
-  const lower = normalizedValues.map((value, index) => pointFor(Math.max(1, value * 0.42), index));
-  const upperPoints = upper.map(([x, y]) => `${x},${y}`).join(' ');
-  const lowerPoints = lower.map(([x, y]) => `${x},${y}`).join(' ');
-  const areaPoints = `${padding.left},${bottom} ${upperPoints} ${padding.left + plotWidth},${bottom}`;
+  const linePoints = (key: 'totalTokens' | 'inputTokens' | 'outputTokens' | 'reasoningTokens') =>
+    data.map((point, index) => pointFor(point[key], index, data.length)).map(([x, y]) => `${x},${y}`).join(' ');
+  const totalPoints = linePoints('totalTokens');
+  const inputPoints = linePoints('inputTokens');
+  const outputPoints = linePoints('outputTokens');
+  const reasoningPoints = linePoints('reasoningTokens');
+  const areaPoints = data.length
+    ? `${padding.left},${bottom} ${totalPoints} ${padding.left + plotWidth},${bottom}`
+    : '';
+  const xLabels = data.filter((_, index) => index === 0 || index === Math.floor(data.length / 2) || index === data.length - 1);
 
   return (
-    <div className="h-[360px] w-full overflow-hidden rounded-lg bg-background">
+    <div className="relative h-[360px] w-full overflow-hidden rounded-lg border bg-background">
       <svg
         className="h-full w-full"
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label="Dashboard activity chart"
+        aria-label="Token 使用趋势"
       >
         <defs>
-          <linearGradient id="dashboardAreaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#111111" stopOpacity="0.32" />
-            <stop offset="100%" stopColor="#111111" stopOpacity="0.02" />
+          <linearGradient id="dashboardTokenFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#111111" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="#111111" stopOpacity="0.03" />
           </linearGradient>
         </defs>
-        {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
-          <line
-            key={ratio}
-            x1={padding.left}
-            x2={padding.left + plotWidth}
-            y1={bottom - plotHeight * ratio}
-            y2={bottom - plotHeight * ratio}
-            stroke="var(--border-color)"
-            strokeWidth="1"
-          />
+        {yTicks.map((tick) => (
+          <g key={tick.y}>
+            <text x={padding.left - 14} y={tick.y + 4} textAnchor="end" className="fill-muted-foreground text-[12px]">
+              {tick.label}
+            </text>
+            <line
+              x1={padding.left}
+              x2={padding.left + plotWidth}
+              y1={tick.y}
+              y2={tick.y}
+              stroke="var(--border-color)"
+              strokeDasharray="5 8"
+              strokeWidth="1"
+            />
+          </g>
         ))}
-        <polygon points={areaPoints} fill="url(#dashboardAreaFill)" />
-        <polyline points={upperPoints} fill="none" stroke="#111111" strokeWidth="2" strokeLinejoin="round" />
-        <polyline points={lowerPoints} fill="none" stroke="#111111" strokeWidth="1.5" strokeLinejoin="round" opacity="0.75" />
+        {hasData && (
+          <>
+            <polygon points={areaPoints} fill="url(#dashboardTokenFill)" />
+            <polyline points={totalPoints} fill="none" stroke="#111111" strokeWidth="2.4" strokeLinejoin="round" />
+            <polyline points={inputPoints} fill="none" stroke="#2563eb" strokeWidth="1.9" strokeLinejoin="round" />
+            <polyline points={outputPoints} fill="none" stroke="#10b981" strokeWidth="1.9" strokeLinejoin="round" />
+            <polyline points={reasoningPoints} fill="none" stroke="#8b5cf6" strokeWidth="1.6" strokeLinejoin="round" />
+          </>
+        )}
+        {xLabels.map((point) => {
+          const index = data.indexOf(point);
+          const x = padding.left + (plotWidth * index) / Math.max(1, data.length - 1);
+          return (
+            <text key={`${point.timestampMs}-${index}`} x={x} y={bottom + 28} textAnchor="middle" className="fill-muted-foreground text-[12px]">
+              {point.label}
+            </text>
+          );
+        })}
       </svg>
+      {!hasData && (
+        <div className="absolute inset-0 grid place-items-center px-6 text-center">
+          <div className="rounded-md border bg-card/95 px-5 py-4 text-sm shadow-sm">
+            <div className="font-medium text-foreground">
+              {loading ? '正在读取 Token 数据' : '暂无 Token 使用数据'}
+            </div>
+            <div className="mt-1 text-muted-foreground">
+              产生模型请求后，这里会按时间展示 Token 趋势。
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -232,6 +303,9 @@ export function DashboardPage() {
     claude: null,
     openai: null,
   });
+  const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
+  const [tokenRange, setTokenRange] = useState<UsageTimeRange>('1h');
+  const [usageLoading, setUsageLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const apiKeysCache = useRef<string[]>([]);
 
@@ -311,6 +385,40 @@ export function DashboardPage() {
     }
   }, [connectionStatus, fetchModels, config]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchUsage = async () => {
+      if (connectionStatus !== 'connected') {
+        setUsageEvents([]);
+        setUsageLoading(false);
+        return;
+      }
+
+      setUsageLoading(true);
+      try {
+        const payload = await usageApi.getQueue(300);
+        if (!cancelled) {
+          setUsageEvents(normalizeUsageEvents(payload));
+        }
+      } catch {
+        if (!cancelled) {
+          setUsageEvents([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setUsageLoading(false);
+        }
+      }
+    };
+
+    void fetchUsage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionStatus, apiBase]);
+
   const providerStatsReady =
     providerStats.gemini !== null &&
     providerStats.codex !== null &&
@@ -337,12 +445,18 @@ export function DashboardPage() {
         ? 'common.connecting'
         : 'common.disconnected'
   );
-  const seed = (stats.apiKeys ?? 0) + totalProviderKeys * 3 + models.length * 5;
-  const chartValues = Array.from({ length: 52 }, (_, index) => {
-    const wave = Math.sin(index * 0.78 + seed) * 16 + Math.cos(index * 0.31) * 10;
-    const pulse = index % 9 === 0 || index % 13 === 0 ? 22 : 0;
-    return Math.max(8, Math.round(38 + wave + pulse));
-  });
+  const filteredUsageEvents = useMemo(
+    () => filterUsageEventsByRange(usageEvents, tokenRange),
+    [usageEvents, tokenRange]
+  );
+  const tokenSeries = useMemo(
+    () => trimTrailingEmptyTokenBuckets(buildTokenSeries(filteredUsageEvents, tokenRange)),
+    [filteredUsageEvents, tokenRange]
+  );
+  const tokenSummary = useMemo(
+    () => summarizeUsageEvents(filteredUsageEvents),
+    [filteredUsageEvents]
+  );
   const providerRows = [
     { label: 'Gemini', value: providerStats.gemini, color: providerColors[0] },
     { label: 'Codex', value: providerStats.codex, color: providerColors[1] },
@@ -404,28 +518,47 @@ export function DashboardPage() {
       <Card className="rounded-xl">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>{t('dashboard.system_overview')}</CardTitle>
+            <CardTitle>Token 使用趋势</CardTitle>
             <CardDescription>
-              {apiBase || 'CLI Proxy API'} · {formattedDate}
+              {formatCompactNumber(tokenSummary.tokens.totalTokens)} tokens / {formatCompactNumber(tokenSummary.requests)} requests · usage-queue · {formattedDate}
             </CardDescription>
+            <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-[#111111]" />
+                Total
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-[#2563eb]" />
+                Input
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-[#10b981]" />
+                Output
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-[#8b5cf6]" />
+                Reasoning
+              </span>
+            </div>
           </div>
           <div className="inline-flex rounded-md border bg-background">
-            {['最近 3 小时', '最近 30 分钟', '最近 7 分钟'].map((label, index) => (
+            {tokenTrendRanges.map((range) => (
               <button
-                key={label}
+                key={range.value}
                 type="button"
+                onClick={() => setTokenRange(range.value)}
                 className={cn(
                   'h-9 border-r px-4 text-sm last:border-r-0',
-                  index === 0 && 'bg-muted font-medium'
+                  tokenRange === range.value && 'bg-muted font-medium'
                 )}
               >
-                {label}
+                {range.label}
               </button>
             ))}
           </div>
         </CardHeader>
         <CardContent>
-          <DashboardAreaChart values={chartValues} />
+          <TokenTrendChart data={tokenSeries} loading={usageLoading} />
         </CardContent>
       </Card>
 
