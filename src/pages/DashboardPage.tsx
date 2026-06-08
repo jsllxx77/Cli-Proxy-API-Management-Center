@@ -454,9 +454,17 @@ export function DashboardPage() {
         </Card>
 
         <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle>{t('dashboard.current_config')}</CardTitle>
-            <CardDescription>{connectionLabel}</CardDescription>
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>{t('dashboard.current_config')}</CardTitle>
+              <CardDescription>{connectionLabel}</CardDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/config">
+                <Settings2 className="size-4" />
+                {t('dashboard.edit_settings')}
+              </Link>
+            </Button>
           </CardHeader>
           <CardContent>
             <Table>
@@ -511,12 +519,6 @@ export function DashboardPage() {
           <CardFooter className="justify-between border-t text-sm text-muted-foreground">
             <span>{serverVersion ? `v${serverVersion.trim().replace(/^[vV]+/, '')}` : '-'}</span>
             <span>{serverBuildDate ? new Date(serverBuildDate).toLocaleDateString(i18n.language) : '-'}</span>
-            <Button asChild variant="outline" size="sm">
-              <Link to="/config">
-                <Settings2 className="size-4" />
-                {t('dashboard.edit_settings')}
-              </Link>
-            </Button>
           </CardFooter>
         </Card>
       </section>

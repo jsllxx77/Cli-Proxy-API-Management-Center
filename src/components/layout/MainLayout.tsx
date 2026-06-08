@@ -9,7 +9,6 @@ import {
 } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Inbox, PlusCircle } from 'lucide-react';
 import { Button } from '@/components/shadcn/ui/button';
 import { Separator } from '@/components/shadcn/ui/separator';
 import { PageTransition } from '@/components/common/PageTransition';
@@ -591,26 +590,6 @@ export function MainLayout() {
             </div>
           )}
         </div>
-        {showSidebarLabels && (
-          <div className="flex gap-2 px-3 pb-3">
-            <Button asChild className="h-10 flex-1 bg-foreground text-background hover:bg-foreground/90">
-              <NavLink to="/config" onClick={() => setSidebarOpen(false)}>
-                <PlusCircle className="size-4" />
-                {t('dashboard.edit_settings')}
-              </NavLink>
-            </Button>
-            <Button asChild variant="outline" size="icon" className="h-10 w-10 bg-background">
-              <NavLink
-                to="/logs"
-                onClick={() => setSidebarOpen(false)}
-                aria-label={t('nav.logs')}
-                title={t('nav.logs')}
-              >
-                <Inbox className="size-4" />
-              </NavLink>
-            </Button>
-          </div>
-        )}
 
         <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
           {navGroups.map((group, idx) => (
