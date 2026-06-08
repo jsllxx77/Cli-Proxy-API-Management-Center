@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Inbox, PlusCircle } from 'lucide-react';
 import { Button } from '@/components/shadcn/ui/button';
 import { Separator } from '@/components/shadcn/ui/separator';
 import { PageTransition } from '@/components/common/PageTransition';
@@ -238,6 +239,19 @@ export function MainLayout() {
   const abbrBrandName = t('title.abbr');
   const isLogsPage = location.pathname.startsWith('/logs');
   const showSidebarLabels = !sidebarCollapsed || sidebarOpen;
+  const routeTitle = (() => {
+    const pathname = location.pathname;
+    if (pathname === '/' || pathname === '/dashboard') return t('nav.dashboard');
+    if (pathname.startsWith('/usage')) return t('nav.usage_statistics');
+    if (pathname.startsWith('/ai-providers')) return t('nav.ai_providers');
+    if (pathname.startsWith('/auth-files')) return t('nav.auth_files');
+    if (pathname.startsWith('/oauth')) return t('nav.oauth');
+    if (pathname.startsWith('/quota')) return t('nav.quota_management');
+    if (pathname.startsWith('/logs')) return t('nav.logs');
+    if (pathname.startsWith('/config')) return t('nav.config_management');
+    if (pathname.startsWith('/system')) return t('nav.system_info');
+    return fullBrandName;
+  })();
 
   // 将顶部悬浮控制区高度写入 CSS 变量，供移动端粘性元素和浮层避让。
   useLayoutEffect(() => {
@@ -548,7 +562,7 @@ export function MainLayout() {
     : t('sidebar.toggle_expand', { defaultValue: 'Open navigation' });
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen overflow-hidden bg-muted/35 text-foreground">
       <button
         type="button"
         className={cn(
@@ -577,7 +591,26 @@ export function MainLayout() {
             </div>
           )}
         </div>
-        <Separator />
+        {showSidebarLabels && (
+          <div className="flex gap-2 px-3 pb-3">
+            <Button asChild className="h-10 flex-1 bg-foreground text-background hover:bg-foreground/90">
+              <NavLink to="/config" onClick={() => setSidebarOpen(false)}>
+                <PlusCircle className="size-4" />
+                {t('dashboard.edit_settings')}
+              </NavLink>
+            </Button>
+            <Button asChild variant="outline" size="icon" className="h-10 w-10 bg-background">
+              <NavLink
+                to="/logs"
+                onClick={() => setSidebarOpen(false)}
+                aria-label={t('nav.logs')}
+                title={t('nav.logs')}
+              >
+                <Inbox className="size-4" />
+              </NavLink>
+            </Button>
+          </div>
+        )}
 
         <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
           {navGroups.map((group, idx) => (
@@ -599,13 +632,13 @@ export function MainLayout() {
                     title={showSidebarLabels ? undefined : itemLabel}
                     className={({ isActive }) =>
                       cn(
-                        'group flex min-h-11 items-center gap-3 rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-                        isActive && 'bg-accent text-accent-foreground shadow-sm',
+                        'group flex min-h-9 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground',
+                        isActive && 'bg-background text-foreground shadow-sm',
                         !showSidebarLabels && 'justify-center px-0'
                       )
                     }
                   >
-                    <span className="grid size-8 shrink-0 place-items-center rounded-md border bg-background text-foreground shadow-sm">
+                    <span className="grid size-5 shrink-0 place-items-center text-foreground">
                       {item.icon}
                     </span>
                     {showSidebarLabels && (
@@ -624,9 +657,10 @@ export function MainLayout() {
         </nav>
       </aside>
 
-      <div className="content flex min-w-0 flex-1 flex-col overflow-y-auto" ref={contentRef}>
+      <div className="flex min-w-0 flex-1 overflow-hidden p-2 md:p-3">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-background shadow-sm">
         <header
-          className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-background/88 px-4 backdrop-blur md:px-6"
+          className="flex h-14 shrink-0 items-center justify-between gap-3 border-b bg-background px-4 md:px-5"
           ref={headerRef}
         >
           <div className="flex min-w-0 items-center gap-2">
@@ -659,8 +693,8 @@ export function MainLayout() {
               {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
             </Button>
             <Separator orientation="vertical" className="hidden h-6 md:block" />
-            <div className="min-w-0 text-sm font-medium text-muted-foreground">
-              {fullBrandName}
+            <div className="min-w-0 text-base font-semibold text-foreground">
+              {routeTitle}
             </div>
           </div>
 
@@ -777,9 +811,10 @@ export function MainLayout() {
 
         <main
           className={cn(
-            'flex min-h-full flex-1 flex-col p-4 md:p-6',
+            'flex min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-6',
             isLogsPage && 'min-h-0 overflow-hidden p-0 md:p-0'
           )}
+          ref={contentRef}
         >
           <PageTransition
             render={(location) => <MainRoutes location={location} />}
@@ -788,6 +823,7 @@ export function MainLayout() {
             scrollContainerRef={contentRef}
           />
         </main>
+        </div>
       </div>
     </div>
   );

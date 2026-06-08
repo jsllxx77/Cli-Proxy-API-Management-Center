@@ -136,8 +136,15 @@ const truncateText = (value: unknown, maxLength: number) => {
 
 const normalizeTokens = (value: unknown): UsageTokens => {
   const record = asRecord(value);
-  const inputTokens = numberValue(record.input_tokens ?? record.inputTokens);
-  const outputTokens = numberValue(record.output_tokens ?? record.outputTokens);
+  const inputTokens = numberValue(
+    record.input_tokens ?? record.inputTokens ?? record.prompt_tokens ?? record.promptTokens
+  );
+  const outputTokens = numberValue(
+    record.output_tokens ??
+      record.outputTokens ??
+      record.completion_tokens ??
+      record.completionTokens
+  );
   const reasoningTokens = numberValue(record.reasoning_tokens ?? record.reasoningTokens);
   const cachedTokens = numberValue(record.cached_tokens ?? record.cachedTokens);
   const cacheReadTokens = numberValue(record.cache_read_tokens ?? record.cacheReadTokens);
@@ -165,9 +172,12 @@ export const normalizeUsageEvent = (value: unknown, index = 0): UsageEvent | nul
   if (!isRecord(value)) return null;
 
   const now = Date.now();
-  const tokens = normalizeTokens(value.tokens);
+  const tokens = normalizeTokens(value.tokens ?? value.usage ?? value);
   const fail = asRecord(value.fail);
-  const timestampMs = timestampValue(value.timestamp ?? value.timestampMs, now);
+  const timestampMs = timestampValue(
+    value.timestamp ?? value.timestampMs ?? value.created_at ?? value.createdAt,
+    now
+  );
   const provider = stringValue(value.provider, 'unknown');
   const model = stringValue(value.model, 'unknown');
   const alias = stringValue(value.alias, model);
@@ -176,8 +186,11 @@ export const normalizeUsageEvent = (value: unknown, index = 0): UsageEvent | nul
   const failStatusCode = numberValue(
     fail.status_code ?? fail.statusCode ?? value.fail_status_code ?? value.failStatusCode
   );
-  const failed = boolValue(value.failed) || failStatusCode >= 400;
-  const latencyMs = numberValue(value.latency_ms ?? value.latencyMs);
+  const statusCode = numberValue(value.status ?? value.status_code ?? value.statusCode);
+  const failed = boolValue(value.failed) || failStatusCode >= 400 || statusCode >= 400;
+  const latencyMs = numberValue(
+    value.latency_ms ?? value.latencyMs ?? value.duration_ms ?? value.durationMs
+  );
   const ttftMs = numberValue(value.ttft_ms ?? value.ttftMs);
   const idSource = stringValue(value.id) || [
     requestId,
@@ -209,7 +222,7 @@ export const normalizeUsageEvent = (value: unknown, index = 0): UsageEvent | nul
     latencyMs,
     ttftMs,
     failed,
-    failStatusCode: failStatusCode || (failed ? 500 : 200),
+    failStatusCode: failStatusCode || statusCode || (failed ? 500 : 200),
     failBody: truncateText(fail.body ?? value.fail_body ?? value.failBody, MAX_FAILURE_BODY_LENGTH),
     tokens,
   };

@@ -20,6 +20,7 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/shadcn/ui/card';
@@ -125,36 +126,28 @@ function MetricCard({
   tone?: 'neutral' | 'success' | 'warning' | 'danger';
 }) {
   return (
-    <Card className="overflow-hidden rounded-lg border-border/80 shadow-sm">
-      <CardContent className="relative flex min-h-[148px] flex-col justify-between p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <div className="mt-3 text-3xl font-semibold leading-none tracking-normal text-foreground">
-              {value}
-            </div>
-          </div>
+    <Card className="@container/card rounded-xl bg-gradient-to-t from-muted/50 to-card shadow-sm">
+      <CardHeader className="relative pb-2">
+        <CardDescription>{title}</CardDescription>
+        <CardTitle className="text-3xl font-semibold tabular-nums tracking-normal @[260px]/card:text-4xl">
+          {value}
+        </CardTitle>
+        <div className="absolute right-4 top-4">
           <Badge
             variant={tone === 'danger' ? 'destructive' : tone === 'warning' ? 'warning' : 'outline'}
-            className="shrink-0 rounded-full bg-background/75"
+            className="rounded-full"
           >
             {badge}
           </Badge>
         </div>
-        <div className="mt-6 flex items-end justify-between gap-4">
-          <p className="text-sm leading-5 text-muted-foreground">{subtitle}</p>
-          <div
-            className={cn(
-              'grid size-9 shrink-0 place-items-center rounded-md border bg-muted text-foreground',
-              tone === 'success' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700',
-              tone === 'warning' && 'border-amber-500/30 bg-amber-500/10 text-amber-700',
-              tone === 'danger' && 'border-red-500/30 bg-red-500/10 text-red-700'
-            )}
-          >
-            {icon}
-          </div>
+      </CardHeader>
+      <CardFooter className="flex-col items-start gap-1 text-sm">
+        <div className="flex gap-2 font-medium leading-none">
+          {subtitle}
+          {icon}
         </div>
-      </CardContent>
+        <div className="text-muted-foreground">Token / latency / request health</div>
+      </CardFooter>
     </Card>
   );
 }
@@ -753,85 +746,26 @@ export function UsageAnalyticsPage() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
-      <header className="flex flex-col gap-5 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>{t('nav.dashboard')}</span>
-            <span>/</span>
-            <span>{t('nav.usage_statistics', { defaultValue: '用量统计' })}</span>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl font-semibold leading-tight tracking-normal text-foreground">
-              {t('usage.title', { defaultValue: '用量统计' })}
-            </h1>
-            <Badge variant={usageDisabled ? 'warning' : 'success'} className="rounded-full">
-              {usageDisabled
-                ? t('usage.capture_disabled', { defaultValue: '未启用' })
-                : t('usage.capture_ready', { defaultValue: '已就绪' })}
-            </Badge>
-          </div>
-          <div className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">
-            <div className="flex items-center gap-2">
-              <Database className="size-4" />
-              {t('usage.cached_events', { defaultValue: '本地事件' })}: {formatCompactNumber(events.length)}
-            </div>
-            <div className="flex items-center gap-2">
-              <Activity className="size-4" />
-              {t('usage.request_rate', { defaultValue: '请求速率' })}: {formatRate(summary.requests, range)}
-            </div>
-            <div className="flex items-center gap-2">
-              <Server className="size-4" />
-              {t('usage.providers', { defaultValue: 'Provider' })}: {topProvider}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:justify-end">
-          <Tabs value={range} onValueChange={(value) => setRange(value as UsageTimeRange)}>
-            <TabsList className="grid grid-cols-5">
-              {timeRangeOptions.map((option) => (
-                <TabsTrigger key={option.value} value={option.value} className="px-3">
-                  {t(option.labelKey, { defaultValue: option.fallback })}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <div className="flex items-center gap-2">
-            <ToggleSwitch
-              checked={autoRefresh}
-              onChange={setAutoRefresh}
-              disabled={disableControls}
-              label={
-                <span className="inline-flex items-center gap-2 text-sm font-medium">
-                  <Clock className="size-4" />
-                  {t('usage.auto_refresh', { defaultValue: '自动刷新' })}
-                </span>
-              }
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => loadUsageQueue()}
-              disabled={disableControls || loading}
-            >
-              <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
-              {t('common.refresh')}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={clearEvents}
-              disabled={events.length === 0}
-              aria-label={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
-            >
-              <Trash2 className="size-4" />
-            </Button>
-          </div>
-        </div>
-      </header>
+    <div className="flex w-full flex-col gap-6">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <Badge variant={usageDisabled ? 'warning' : 'success'} className="rounded-full">
+          {usageDisabled
+            ? t('usage.capture_disabled', { defaultValue: '未启用' })
+            : t('usage.capture_ready', { defaultValue: '已就绪' })}
+        </Badge>
+        <span className="inline-flex items-center gap-1.5">
+          <Database className="size-4" />
+          {t('usage.cached_events', { defaultValue: '本地事件' })}: {formatCompactNumber(events.length)}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <Activity className="size-4" />
+          {t('usage.request_rate', { defaultValue: '请求速率' })}: {formatRate(summary.requests, range)}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <Server className="size-4" />
+          {t('usage.providers', { defaultValue: 'Provider' })}: {topProvider}
+        </span>
+      </div>
 
       {error && (
         <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -875,7 +809,7 @@ export function UsageAnalyticsPage() {
         />
       </section>
 
-      <Card className="rounded-md">
+      <Card className="rounded-xl">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>{t('usage.token_curve', { defaultValue: 'Token 曲线' })}</CardTitle>
@@ -889,6 +823,48 @@ export function UsageAnalyticsPage() {
             <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-emerald-500" />Output</span>
             <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-violet-500" />Reasoning</span>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Tabs value={range} onValueChange={(value) => setRange(value as UsageTimeRange)}>
+              <TabsList>
+                {timeRangeOptions.slice(1).map((option) => (
+                  <TabsTrigger key={option.value} value={option.value} className="px-3">
+                    {t(option.labelKey, { defaultValue: option.fallback })}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <ToggleSwitch
+              checked={autoRefresh}
+              onChange={setAutoRefresh}
+              disabled={disableControls}
+              label={
+                <span className="inline-flex items-center gap-2 text-sm font-medium">
+                  <Clock className="size-4" />
+                  {t('usage.auto_refresh', { defaultValue: '自动刷新' })}
+                </span>
+              }
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => loadUsageQueue()}
+              disabled={disableControls || loading}
+            >
+              <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+              {t('common.refresh')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={clearEvents}
+              disabled={events.length === 0}
+              aria-label={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <TokenAreaChart data={tokenSeries} />
@@ -896,7 +872,7 @@ export function UsageAnalyticsPage() {
       </Card>
 
       <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card className="rounded-md">
+        <Card className="rounded-xl">
           <CardHeader>
             <CardTitle>{t('usage.model_distribution', { defaultValue: '模型调用分布' })}</CardTitle>
             <CardDescription>按本地队列中的请求量聚合模型调用。</CardDescription>
@@ -906,7 +882,7 @@ export function UsageAnalyticsPage() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-md">
+        <Card className="rounded-xl">
           <CardHeader>
             <CardTitle>{t('usage.latency_ranking', { defaultValue: '延迟排行' })}</CardTitle>
             <CardDescription>按 Provider 与模型聚合平均延迟。</CardDescription>
@@ -918,7 +894,7 @@ export function UsageAnalyticsPage() {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <Card className="rounded-md">
+        <Card className="rounded-xl">
           <CardHeader>
             <CardTitle>{t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}</CardTitle>
             <CardDescription>按上游 Provider 聚合请求。</CardDescription>
@@ -927,7 +903,7 @@ export function UsageAnalyticsPage() {
             <DistributionBars groups={providerDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
           </CardContent>
         </Card>
-        <Card className="rounded-md">
+        <Card className="rounded-xl">
           <CardHeader>
             <CardTitle>{t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}</CardTitle>
             <CardDescription>按 API Endpoint 聚合请求。</CardDescription>
@@ -938,7 +914,7 @@ export function UsageAnalyticsPage() {
         </Card>
       </section>
 
-      <Card className="rounded-md">
+      <Card className="rounded-xl">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>{t('usage.recent_requests', { defaultValue: '最近请求' })}</CardTitle>
