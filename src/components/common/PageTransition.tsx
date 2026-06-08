@@ -14,6 +14,7 @@ interface PageTransitionProps {
   getRouteOrder?: (pathname: string) => number | null;
   getTransitionVariant?: (fromPathname: string, toPathname: string) => TransitionVariant;
   scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  disabled?: boolean;
 }
 
 // Premium personality: enter > exit, decelerate-in / accelerate-out.
@@ -70,6 +71,7 @@ export function PageTransition({
   getRouteOrder,
   getTransitionVariant,
   scrollContainerRef,
+  disabled = false,
 }: PageTransitionProps) {
   const location = useLocation();
   const currentLayerRef = useRef<HTMLDivElement>(null);
@@ -101,6 +103,7 @@ export function PageTransition({
   }, [scrollContainerRef]);
 
   useLayoutEffect(() => {
+    if (disabled) return;
     if (isAnimating) return;
     if (location.key === currentLayerKey) return;
     if (currentLayerPathname === location.pathname) return;
@@ -219,10 +222,12 @@ export function PageTransition({
     getTransitionVariant,
     resolveScrollContainer,
     layers,
+    disabled,
   ]);
 
   // Run Motion animation when animating starts
   useLayoutEffect(() => {
+    if (disabled) return;
     if (!isAnimating) return;
 
     if (!currentLayerRef.current) return;
@@ -404,7 +409,21 @@ export function PageTransition({
       cancelled = true;
       activeAnimations.forEach((animation) => animation.stop());
     };
-  }, [isAnimating, resolveScrollContainer]);
+  }, [isAnimating, resolveScrollContainer, disabled]);
+
+  if (disabled) {
+    return (
+      <div className="page-transition">
+        <div className="page-transition__layer">
+          <PageTransitionLayerContext.Provider
+            value={PAGE_TRANSITION_LAYER_CONTEXT_VALUES.current}
+          >
+            {render(location)}
+          </PageTransitionLayerContext.Provider>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`page-transition${isAnimating ? ' page-transition--animating' : ''}`}>

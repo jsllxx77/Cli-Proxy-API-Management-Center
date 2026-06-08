@@ -642,12 +642,7 @@ export function MainLayout() {
                       {item.icon}
                     </span>
                     {showSidebarLabels && (
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm leading-5">{itemLabel}</span>
-                        <span className="block truncate text-xs font-normal text-muted-foreground">
-                          {t(item.metaKey)}
-                        </span>
-                      </span>
+                      <span className="min-w-0 truncate text-sm leading-5">{itemLabel}</span>
                     )}
                   </NavLink>
                 );
@@ -817,6 +812,7 @@ export function MainLayout() {
           ref={contentRef}
         >
           <PageTransition
+            disabled
             render={(location) => <MainRoutes location={location} />}
             getRouteOrder={getRouteOrder}
             getTransitionVariant={getTransitionVariant}
