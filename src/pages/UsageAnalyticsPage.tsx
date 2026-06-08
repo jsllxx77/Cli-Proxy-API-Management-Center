@@ -1,20 +1,50 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/Button';
-import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import {
-  IconAlertTriangle,
-  IconChartLine,
-  IconCheckCircle2,
-  IconDownload,
-  IconInfo,
-  IconNetwork,
-  IconRefreshCw,
-  IconSlidersHorizontal,
-  IconTimer,
-  IconTrash2,
-  IconTrendingUp,
-} from '@/components/ui/icons';
+  Activity,
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  Clock,
+  Database,
+  Download,
+  RefreshCw,
+  Server,
+  Trash2,
+  TrendingUp,
+  Zap,
+} from 'lucide-react';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { Badge } from '@/components/shadcn/ui/badge';
+import { Button } from '@/components/shadcn/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/shadcn/ui/card';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/shadcn/ui/table';
+import { Tabs, TabsList, TabsTrigger } from '@/components/shadcn/ui/tabs';
+import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useInterval } from '@/hooks/useInterval';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
@@ -39,11 +69,11 @@ import {
   type UsageGroup,
   type UsageTimeRange,
 } from '@/utils/usageAnalytics';
-import styles from './UsageAnalyticsPage.module.scss';
+import { cn } from '@/lib/utils';
 
 const POLL_INTERVAL_MS = 5000;
 const USAGE_QUEUE_COUNT = 300;
-const RECENT_REQUEST_LIMIT = 10;
+const RECENT_REQUEST_LIMIT = 12;
 
 const timeRangeOptions: Array<{ value: UsageTimeRange; labelKey: string; fallback: string }> = [
   { value: '15m', labelKey: 'usage.range_15m', fallback: '15 分钟' },
@@ -52,6 +82,8 @@ const timeRangeOptions: Array<{ value: UsageTimeRange; labelKey: string; fallbac
   { value: '24h', labelKey: 'usage.range_24h', fallback: '24 小时' },
   { value: 'all', labelKey: 'usage.range_all', fallback: '全部' },
 ];
+
+const chartPalette = ['#0f172a', '#2563eb', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444'];
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === 'string' ? error : '';
@@ -79,357 +111,333 @@ const formatTime = (timestampMs: number, locale: string) => {
   });
 };
 
-const getStatusLabel = (event: UsageEvent) =>
-  event.failed ? `HTTP ${event.failStatusCode || 500}` : 'OK';
+const compactLabel = (value: string, fallback = 'unknown') => value.trim() || fallback;
 
-function MetricTile({
-  label,
+const tooltipNumber = (value: unknown) => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+function MetricCard({
+  title,
   value,
-  detail,
+  subtitle,
+  badge,
   icon,
-  meta,
   tone = 'neutral',
 }: {
-  label: string;
+  title: string;
   value: string;
-  detail?: string;
+  subtitle: string;
+  badge: string;
   icon: React.ReactNode;
-  meta?: string;
   tone?: 'neutral' | 'success' | 'warning' | 'danger';
 }) {
-  const toneClass = tone === 'neutral' ? '' : styles[`tone${tone}`];
   return (
-    <div className={[styles.metricTile, toneClass].filter(Boolean).join(' ')}>
-      <div className={styles.metricIcon}>{icon}</div>
-      <div className={styles.metricText}>
-        <span className={styles.metricLabel}>{label}</span>
-        <strong className={styles.metricValue}>{value}</strong>
-        {detail && <span className={styles.metricDetail}>{detail}</span>}
+    <Card className="overflow-hidden rounded-lg border-border/80 shadow-sm">
+      <CardContent className="relative flex min-h-[148px] flex-col justify-between p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+            <div className="mt-3 text-3xl font-semibold leading-none tracking-normal text-foreground">
+              {value}
+            </div>
+          </div>
+          <Badge
+            variant={tone === 'danger' ? 'destructive' : tone === 'warning' ? 'warning' : 'outline'}
+            className="shrink-0 rounded-full bg-background/75"
+          >
+            {badge}
+          </Badge>
+        </div>
+        <div className="mt-6 flex items-end justify-between gap-4">
+          <p className="text-sm leading-5 text-muted-foreground">{subtitle}</p>
+          <div
+            className={cn(
+              'grid size-9 shrink-0 place-items-center rounded-md border bg-muted text-foreground',
+              tone === 'success' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700',
+              tone === 'warning' && 'border-amber-500/30 bg-amber-500/10 text-amber-700',
+              tone === 'danger' && 'border-red-500/30 bg-red-500/10 text-red-700'
+            )}
+          >
+            {icon}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
+  const chartData = data.map((point) => ({
+    label: point.label,
+    total: point.totalTokens,
+    input: point.inputTokens,
+    output: point.outputTokens,
+    reasoning: point.reasoningTokens,
+    requests: point.requests,
+  }));
+
+  if (!chartData.length || !chartData.some((point) => point.requests > 0)) {
+    return (
+      <div className="grid h-[360px] place-items-center rounded-lg border border-dashed bg-muted/30">
+        <div className="flex max-w-md items-center gap-4 px-6 text-left">
+          <div className="grid size-10 shrink-0 place-items-center rounded-full border bg-background text-muted-foreground">
+            <BarChart3 className="size-5" />
+          </div>
+          <div>
+            <div className="font-medium text-foreground">暂无统计数据</div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              产生新的模型请求后，这里会显示实时 Token 和请求趋势。
+            </div>
+          </div>
+        </div>
       </div>
-      {meta && <span className={styles.metricMeta}>{meta}</span>}
+    );
+  }
+
+  return (
+    <div className="h-[360px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={chartData} margin={{ left: 4, right: 8, top: 10, bottom: 0 }}>
+          <defs>
+            <linearGradient id="tokenTotalFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#0f172a" stopOpacity={0.34} />
+              <stop offset="95%" stopColor="#0f172a" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={10}
+            minTickGap={28}
+            tick={{ fill: 'var(--text-tertiary)', fontSize: 12 }}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            tickFormatter={(value: number) => formatCompactNumber(value)}
+            tick={{ fill: 'var(--text-tertiary)', fontSize: 12 }}
+            width={44}
+          />
+          <RechartsTooltip
+            cursor={{ stroke: 'var(--border-color)' }}
+            formatter={(value, name) => [formatCompactNumber(tooltipNumber(value)), String(name)]}
+            contentStyle={{
+              background: 'var(--bg-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              color: 'var(--text-primary)',
+            }}
+          />
+          <Area
+            type="monotone"
+            dataKey="total"
+            name="Total"
+            stroke="#0f172a"
+            strokeWidth={2}
+            fill="url(#tokenTotalFill)"
+          />
+          <Area type="monotone" dataKey="input" name="Input" stroke="#2563eb" strokeWidth={1.5} fill="transparent" />
+          <Area type="monotone" dataKey="output" name="Output" stroke="#10b981" strokeWidth={1.5} fill="transparent" />
+          <Area type="monotone" dataKey="reasoning" name="Reasoning" stroke="#8b5cf6" strokeWidth={1.5} fill="transparent" />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
 
-function TokenLineChart({ data }: { data: TokenSeriesPoint[] }) {
-  const width = 720;
-  const height = 240;
-  const padding = { top: 20, right: 18, bottom: 34, left: 48 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-  const maxTokens = Math.max(...data.map((point) => point.totalTokens), 1);
-  const xStep = data.length > 1 ? plotWidth / (data.length - 1) : plotWidth;
-  const getPointValue = (point: TokenSeriesPoint, key: keyof TokenSeriesPoint) =>
-    typeof point[key] === 'number' ? point[key] : 0;
-  const points = data.map((point, index) => {
-    const x = padding.left + index * xStep;
-    const y = padding.top + plotHeight - (point.totalTokens / maxTokens) * plotHeight;
-    return { ...point, x, y };
-  });
-  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x},${point.y}`).join(' ');
-  const seriesPath = (key: 'inputTokens' | 'outputTokens' | 'reasoningTokens') =>
-    points
-      .map((point, index) => {
-        const value = getPointValue(point, key);
-        const y = padding.top + plotHeight - (value / maxTokens) * plotHeight;
-        return `${index === 0 ? 'M' : 'L'}${point.x},${y}`;
-      })
-      .join(' ');
-  const areaPath =
-    points.length > 0
-      ? `${linePath} L${points[points.length - 1].x},${padding.top + plotHeight} L${points[0].x},${padding.top + plotHeight} Z`
-      : '';
-  const labelIndexes = Array.from(
-    new Set([0, Math.floor((data.length - 1) / 2), Math.max(data.length - 1, 0)])
-  ).filter((index) => index >= 0 && index < data.length);
+function DistributionBars({
+  groups,
+  emptyText,
+  metric = 'requests',
+}: {
+  groups: UsageGroup[];
+  emptyText: string;
+  metric?: 'requests' | 'tokens' | 'latency';
+}) {
+  const chartData = groups.map((group, index) => ({
+    name: group.label,
+    value:
+      metric === 'tokens'
+        ? group.totalTokens
+        : metric === 'latency'
+          ? Math.round(group.avgLatencyMs)
+          : group.requests,
+    color: chartPalette[index % chartPalette.length],
+  }));
+
+  if (!chartData.length) {
+    return <div className="py-8 text-sm text-muted-foreground">{emptyText}</div>;
+  }
 
   return (
-    <svg className={styles.tokenChart} viewBox={`0 0 ${width} ${height}`} role="img">
-      <title>Token curve</title>
-      {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-        const y = padding.top + plotHeight - ratio * plotHeight;
-        return (
-          <g key={ratio}>
-            <line
-              x1={padding.left}
-              x2={width - padding.right}
-              y1={y}
-              y2={y}
-              className={styles.chartGridLine}
+    <div className="space-y-4">
+      <div className="h-[220px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} layout="vertical" margin={{ left: 4, right: 12, top: 4, bottom: 4 }}>
+            <CartesianGrid horizontal={false} stroke="var(--border-color)" />
+            <XAxis type="number" hide />
+            <YAxis
+              dataKey="name"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              width={86}
+              tick={{ fill: 'var(--text-tertiary)', fontSize: 12 }}
             />
-            <text x={padding.left - 10} y={y + 4} className={styles.chartAxisLabel}>
-              {formatCompactNumber(maxTokens * ratio)}
-            </text>
-          </g>
-        );
-      })}
-      {areaPath && <path d={areaPath} className={styles.chartArea} />}
-      <path d={seriesPath('inputTokens')} className={`${styles.chartLineThin} ${styles.chartLineInput}`} />
-      <path d={seriesPath('outputTokens')} className={`${styles.chartLineThin} ${styles.chartLineOutput}`} />
-      <path d={seriesPath('reasoningTokens')} className={`${styles.chartLineThin} ${styles.chartLineReasoning}`} />
-      {linePath && <path d={linePath} className={styles.chartLine} />}
-      {points.map((point) =>
-        point.requests > 0 ? (
-          <circle key={point.timestampMs} cx={point.x} cy={point.y} r="3.5" className={styles.chartPoint}>
-            <title>
-              {point.label}: {formatCompactNumber(point.totalTokens)}
-            </title>
-          </circle>
-        ) : null
-      )}
-      {labelIndexes.map((index) => (
-        <text
-          key={data[index].timestampMs}
-          x={padding.left + index * xStep}
-          y={height - 10}
-          className={styles.chartBottomLabel}
-          textAnchor={index === 0 ? 'start' : index === data.length - 1 ? 'end' : 'middle'}
-        >
-          {data[index].label}
-        </text>
+            <RechartsTooltip
+              cursor={{ fill: 'color-mix(in srgb, var(--bg-secondary) 60%, transparent)' }}
+              formatter={(value) => [
+                metric === 'latency'
+                  ? formatDuration(tooltipNumber(value))
+                  : formatCompactNumber(tooltipNumber(value)),
+                metric === 'tokens' ? 'Tokens' : metric === 'latency' ? 'Latency' : 'Requests',
+              ]}
+              contentStyle={{
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 8,
+              }}
+            />
+            <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={16}>
+              {chartData.map((entry) => (
+                <Cell key={entry.name} fill={entry.color} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="space-y-2">
+        {groups.slice(0, 5).map((group, index) => (
+          <div key={group.key} className="flex items-center justify-between gap-3 text-sm">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className="size-2.5 shrink-0 rounded-sm"
+                style={{ background: chartPalette[index % chartPalette.length] }}
+              />
+              <span className="truncate font-medium">{group.label}</span>
+            </div>
+            <span className="shrink-0 text-muted-foreground">
+              {formatCompactNumber(group.requests)} req
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LatencyList({ groups, emptyText }: { groups: UsageGroup[]; emptyText: string }) {
+  const maxLatency = Math.max(...groups.map((group) => group.avgLatencyMs), 1);
+
+  if (!groups.length) {
+    return <div className="py-8 text-sm text-muted-foreground">{emptyText}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {groups.map((group) => (
+        <div key={group.key} className="space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{group.label}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {formatCompactNumber(group.requests)} req / {formatCompactNumber(group.totalTokens)} tok
+              </div>
+            </div>
+            <Badge variant="outline" className="shrink-0 font-mono">
+              {formatDuration(group.avgLatencyMs)}
+            </Badge>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-foreground"
+              style={{ width: `${Math.max(4, (group.avgLatencyMs / maxLatency) * 100)}%` }}
+            />
+          </div>
+        </div>
       ))}
-    </svg>
-  );
-}
-
-function ChartEmptySkeleton({ title, description }: { title: string; description: string }) {
-  return (
-    <div className={styles.chartEmpty}>
-      <div className={styles.chartEmptyGrid} aria-hidden="true">
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
-      <div className={styles.chartEmptyContent}>
-        <IconChartLine size={22} />
-        <strong>{title}</strong>
-        <span>{description}</span>
-      </div>
     </div>
   );
 }
 
-function DataChip({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string;
-  value: string;
-  tone?: 'neutral' | 'success' | 'warning' | 'danger';
-}) {
-  return (
-    <div className={`${styles.dataChip} ${styles[`chip${tone}`]}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function TokenBreakdownCard({
-  label,
-  value,
-  total,
-  tone,
-}: {
-  label: string;
-  value: number;
-  total: number;
-  tone: 'input' | 'output' | 'reasoning' | 'cache';
-}) {
-  const percent = total > 0 ? Math.min(100, (value / total) * 100) : 0;
-  return (
-    <div className={styles.tokenBreakdownCard}>
-      <div className={styles.tokenBreakdownTop}>
-        <span className={`${styles.tokenDot} ${styles[`tokenDot${tone}`]}`} />
-        <span>{label}</span>
-      </div>
-      <strong>{formatCompactNumber(value)}</strong>
-      <div className={styles.tokenBreakdownTrack} aria-hidden="true">
-        <span className={styles[`tokenFill${tone}`]} style={{ width: `${percent}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function RankingList({
-  title,
-  groups,
-  metric,
-  emptyText,
-  caption,
-}: {
-  title: string;
-  groups: UsageGroup[];
-  metric: 'latency' | 'tokens' | 'requests';
-  emptyText: string;
-  caption?: string;
-}) {
-  const maxValue = Math.max(
-    ...groups.map((group) =>
-      metric === 'latency'
-        ? group.avgLatencyMs
-        : metric === 'tokens'
-          ? group.totalTokens
-          : group.requests
-    ),
-    1
-  );
-
-  return (
-    <section className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <div>
-          <h2>{title}</h2>
-          {caption && <span>{caption}</span>}
-        </div>
-      </div>
-      {groups.length === 0 ? (
-        <div className={styles.mutedState}>{emptyText}</div>
-      ) : (
-        <div className={styles.rankingList}>
-          {groups.map((group) => {
-            const value =
-              metric === 'latency'
-                ? group.avgLatencyMs
-                : metric === 'tokens'
-                  ? group.totalTokens
-                  : group.requests;
-            return (
-              <div key={group.key} className={styles.rankRow}>
-                <div className={styles.rankMeta}>
-                  <span className={styles.rankLabel} title={group.label}>
-                    {group.label}
-                  </span>
-                  <span className={styles.rankSub}>
-                    {formatCompactNumber(group.requests)} req · {formatCompactNumber(group.totalTokens)} tok
-                  </span>
-                </div>
-                <div className={styles.rankMeasure}>
-                  <span>
-                    {metric === 'latency'
-                      ? formatDuration(value)
-                      : metric === 'tokens'
-                        ? formatCompactNumber(value)
-                        : formatCompactNumber(value)}
-                  </span>
-                  <div className={styles.rankTrack} aria-hidden="true">
-                    <div
-                      className={styles.rankFill}
-                      style={{ width: `${Math.max(4, (value / maxValue) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function DistributionPanel({
-  title,
-  caption,
-  groups,
-  emptyText,
-}: {
-  title: string;
-  caption: string;
-  groups: UsageGroup[];
-  emptyText: string;
-}) {
-  const total = groups.reduce((sum, group) => sum + group.requests, 0);
-  return (
-    <section className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <div>
-          <h2>{title}</h2>
-          <span>{caption}</span>
-        </div>
-      </div>
-      {groups.length === 0 ? (
-        <div className={styles.mutedState}>{emptyText}</div>
-      ) : (
-        <div className={styles.distributionList}>
-          {groups.map((group, index) => {
-            const percent = total > 0 ? (group.requests / total) * 100 : 0;
-            return (
-              <div className={styles.distributionRow} key={group.key}>
-                <div className={styles.distributionMeta}>
-                  <span className={`${styles.distributionSwatch} ${styles[`swatch${index % 6}`]}`} />
-                  <span title={group.label}>{group.label}</span>
-                </div>
-                <div className={styles.distributionMeasure}>
-                  <strong>{formatCompactNumber(group.requests)}</strong>
-                  <span>{formatPercent(percent)}</span>
-                </div>
-                <div className={styles.distributionTrack} aria-hidden="true">
-                  <span style={{ width: `${Math.max(3, percent)}%` }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function RecentRequestsTable({
+function RecentEventsTable({
   events,
   locale,
   emptyText,
+  onDownload,
 }: {
   events: UsageEvent[];
   locale: string;
   emptyText: string;
+  onDownload: (event: UsageEvent) => void;
 }) {
-  if (events.length === 0) {
-    return <div className={styles.mutedState}>{emptyText}</div>;
+  if (!events.length) {
+    return <div className="rounded-lg border border-dashed bg-muted/30 p-8 text-sm text-muted-foreground">{emptyText}</div>;
   }
 
   return (
-    <div className={styles.compactTableWrap}>
-      <table className={styles.compactTable}>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Status</th>
-            <th>Provider / Model</th>
-            <th>Endpoint</th>
-            <th>Tokens</th>
-            <th>Latency</th>
-          </tr>
-        </thead>
-        <tbody>
+    <div className="rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Time</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Provider / Model</TableHead>
+            <TableHead>Endpoint</TableHead>
+            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Latency</TableHead>
+            <TableHead className="w-[56px]" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {events.map((event) => (
-            <tr key={event.id}>
-              <td>{formatTime(event.timestampMs, locale)}</td>
-              <td>
-                <span className={`${styles.eventStatus} ${event.failed ? styles.eventFailed : styles.eventOk}`}>
-                  {getStatusLabel(event)}
-                </span>
-              </td>
-              <td>
-                <div className={styles.tableMainCell}>
-                  <strong>{event.provider}</strong>
-                  <span>{event.alias || event.model}</span>
+            <TableRow key={event.id}>
+              <TableCell className="whitespace-nowrap text-muted-foreground">
+                {formatTime(event.timestampMs, locale)}
+              </TableCell>
+              <TableCell>
+                <Badge
+                  variant={event.failed ? 'destructive' : 'success'}
+                  className="whitespace-nowrap rounded-full"
+                >
+                  {event.failed ? `HTTP ${event.failStatusCode || 500}` : 'OK'}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <div className="max-w-[260px]">
+                  <div className="truncate font-medium">{event.provider}</div>
+                  <div className="truncate text-xs text-muted-foreground">{event.alias || event.model}</div>
                 </div>
-              </td>
-              <td>
-                <span className={styles.requestId} title={event.endpoint}>
+              </TableCell>
+              <TableCell>
+                <span className="block max-w-[180px] truncate font-mono text-xs text-muted-foreground">
                   {event.endpoint}
                 </span>
-              </td>
-              <td>{formatCompactNumber(event.tokens.totalTokens)}</td>
-              <td>{formatDuration(event.latencyMs)}</td>
-            </tr>
+              </TableCell>
+              <TableCell className="text-right font-mono">
+                {formatCompactNumber(event.tokens.totalTokens)}
+              </TableCell>
+              <TableCell className="text-right font-mono">{formatDuration(event.latencyMs)}</TableCell>
+              <TableCell>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={!event.requestId}
+                  onClick={() => onDownload(event)}
+                  aria-label="Download request log"
+                >
+                  <Download className="size-4" />
+                </Button>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -517,23 +525,15 @@ export function UsageAnalyticsPage() {
   const tokenSeries = useMemo(() => buildTokenSeries(filteredEvents, range), [filteredEvents, range]);
   const latencyRanking = useMemo(() => rankUsageLatency(filteredEvents), [filteredEvents]);
   const modelDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => event.alias || event.model, 10),
+    () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.alias || event.model), 8),
     [filteredEvents]
   );
   const providerDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => event.provider, 8),
+    () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.provider), 8),
     [filteredEvents]
   );
   const endpointDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => event.endpoint, 8),
-    [filteredEvents]
-  );
-  const executorDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => event.executorType, 6),
-    [filteredEvents]
-  );
-  const authDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => event.authType, 6),
+    () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.endpoint), 8),
     [filteredEvents]
   );
   const failedEvents = useMemo(() => getFailedUsageEvents(filteredEvents), [filteredEvents]);
@@ -542,9 +542,9 @@ export function UsageAnalyticsPage() {
     [filteredEvents]
   );
   const disableControls = connectionStatus !== 'connected';
-  const busiestModel = modelDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
-  const slowestRoute = latencyRanking[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
-  const failureTone = summary.failures > 0 ? 'warning' : 'success';
+  const failureRate = Math.max(0, 100 - summary.successRate);
+  const topModel = modelDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
+  const topProvider = providerDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
 
   const clearEvents = () => {
     showConfirmation({
@@ -579,412 +579,221 @@ export function UsageAnalyticsPage() {
   };
 
   return (
-    <div className={styles.usagePage}>
-      <section className={styles.pageInset}>
-        <header className={styles.header}>
-          <div>
-            <div className={styles.breadcrumb}>
-              <span>{t('nav.dashboard')}</span>
-              <span>/</span>
-              <span>{t('nav.usage_statistics', { defaultValue: '用量统计' })}</span>
+    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
+      <header className="flex flex-col gap-4 rounded-lg border bg-card p-6 shadow-sm lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>{t('nav.dashboard')}</span>
+            <span>/</span>
+            <span>{t('nav.usage_statistics', { defaultValue: '用量统计' })}</span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-semibold leading-tight tracking-normal text-foreground">
+              {t('usage.title', { defaultValue: '用量统计' })}
+            </h1>
+            <Badge variant={usageDisabled ? 'warning' : 'success'} className="rounded-full">
+              {usageDisabled
+                ? t('usage.capture_disabled', { defaultValue: '未启用' })
+                : t('usage.capture_ready', { defaultValue: '已就绪' })}
+            </Badge>
+          </div>
+          <div className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">
+            <div className="flex items-center gap-2">
+              <Database className="size-4" />
+              {t('usage.cached_events', { defaultValue: '本地事件' })}: {formatCompactNumber(events.length)}
             </div>
-            <h1>{t('usage.title', { defaultValue: '用量统计' })}</h1>
-            <div className={styles.headerMeta}>
-              <DataChip
-                label={t('usage.capture_status', { defaultValue: '采集状态' })}
-                value={
-                  usageDisabled
-                    ? t('usage.capture_disabled', { defaultValue: '未启用' })
-                    : t('usage.capture_ready', { defaultValue: '已就绪' })
-                }
-                tone={usageDisabled ? 'warning' : 'success'}
-              />
-              <DataChip
-                label={t('usage.cached_events', { defaultValue: '本地事件' })}
-                value={formatCompactNumber(events.length)}
-              />
-              <DataChip
-                label={t('usage.request_rate', { defaultValue: '请求速率' })}
-                value={formatRate(summary.requests, range)}
-              />
+            <div className="flex items-center gap-2">
+              <Activity className="size-4" />
+              {t('usage.request_rate', { defaultValue: '请求速率' })}: {formatRate(summary.requests, range)}
+            </div>
+            <div className="flex items-center gap-2">
+              <Server className="size-4" />
+              {t('usage.providers', { defaultValue: 'Provider' })}: {topProvider}
             </div>
           </div>
-          <div className={styles.headerActions}>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:justify-end">
+          <Tabs value={range} onValueChange={(value) => setRange(value as UsageTimeRange)}>
+            <TabsList className="grid grid-cols-5">
+              {timeRangeOptions.map((option) => (
+                <TabsTrigger key={option.value} value={option.value} className="px-3">
+                  {t(option.labelKey, { defaultValue: option.fallback })}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <div className="flex items-center gap-2">
             <ToggleSwitch
               checked={autoRefresh}
               onChange={setAutoRefresh}
               disabled={disableControls}
               label={
-                <span className={styles.switchLabel}>
-                  <IconTimer size={16} />
+                <span className="inline-flex items-center gap-2 text-sm font-medium">
+                  <Clock className="size-4" />
                   {t('usage.auto_refresh', { defaultValue: '自动刷新' })}
                 </span>
               }
             />
             <Button
               type="button"
-              variant="secondary"
+              variant="outline"
               size="sm"
               onClick={() => loadUsageQueue()}
-              loading={loading}
-              disabled={disableControls}
+              disabled={disableControls || loading}
             >
-              <span className={styles.buttonContent}>
-                <IconRefreshCw size={16} />
-                {t('common.refresh')}
-              </span>
+              <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+              {t('common.refresh')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="icon"
               onClick={clearEvents}
               disabled={events.length === 0}
-              title={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
               aria-label={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
             >
-              <IconTrash2 size={16} />
+              <Trash2 className="size-4" />
             </Button>
           </div>
-        </header>
-
-        <div className={styles.secondaryBar}>
-          <div className={styles.rangeBar} role="tablist" aria-label={t('usage.range_label', { defaultValue: '时间范围' })}>
-            {timeRangeOptions.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`${styles.rangeButton} ${range === option.value ? styles.rangeButtonActive : ''}`}
-                onClick={() => setRange(option.value)}
-                aria-pressed={range === option.value}
-              >
-                {t(option.labelKey, { defaultValue: option.fallback })}
-              </button>
-            ))}
-          </div>
         </div>
+      </header>
 
-        <div className={styles.statusGrid}>
-          <div className={styles.statusCard}>
-            <IconNetwork size={18} />
-            <span>{t('usage.connection', { defaultValue: '连接' })}</span>
-            <strong>{t(`common.${connectionStatus}`, { defaultValue: connectionStatus })}</strong>
-          </div>
-          <div className={styles.statusCard}>
-            <IconSlidersHorizontal size={18} />
-            <span>{t('usage.queue_sample', { defaultValue: '队列采样' })}</span>
-            <strong>{USAGE_QUEUE_COUNT}</strong>
-          </div>
-          <div className={styles.statusCard}>
-            <IconInfo size={18} />
-            <span>{t('usage.last_loaded_label', { defaultValue: '最后刷新' })}</span>
-            <strong>
-              {lastLoadedAt
-                ? formatTime(lastLoadedAt, i18n.language)
-                : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
-            </strong>
-          </div>
-          <div className={styles.statusCard}>
-            <IconChartLine size={18} />
-            <span>{t('usage.top_model', { defaultValue: '高频模型' })}</span>
-            <strong title={busiestModel}>{busiestModel}</strong>
-          </div>
+      {error && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
         </div>
+      )}
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          title={t('usage.total_requests', { defaultValue: '请求数' })}
+          value={formatCompactNumber(summary.requests)}
+          subtitle={`${formatCompactNumber(summary.successes)} ${t('common.success')} / ${formatCompactNumber(summary.failures)} ${t('common.failure')}`}
+          badge={formatRate(summary.requests, range)}
+          icon={<TrendingUp className="size-5" />}
+        />
+        <MetricCard
+          title={t('usage.total_tokens', { defaultValue: 'Token 总量' })}
+          value={formatCompactNumber(summary.tokens.totalTokens)}
+          subtitle={`I ${formatCompactNumber(summary.tokens.inputTokens)} / O ${formatCompactNumber(summary.tokens.outputTokens)} / R ${formatCompactNumber(summary.tokens.reasoningTokens)}`}
+          badge={`Cache ${formatCompactNumber(summary.tokens.cachedTokens + summary.tokens.cacheReadTokens)}`}
+          icon={<Zap className="size-5" />}
+          tone="success"
+        />
+        <MetricCard
+          title={t('usage.success_rate', { defaultValue: '成功率' })}
+          value={formatPercent(summary.successRate)}
+          subtitle={t('usage.failure_count', {
+            defaultValue: '{{count}} 次失败',
+            count: formatCompactNumber(summary.failures),
+          })}
+          badge={`${formatPercent(failureRate)} fail`}
+          icon={<CheckCircle2 className="size-5" />}
+          tone={summary.failures > 0 ? 'warning' : 'success'}
+        />
+        <MetricCard
+          title={t('usage.avg_latency', { defaultValue: '平均延迟' })}
+          value={formatDuration(summary.avgLatencyMs)}
+          subtitle={`TTFT ${formatDuration(summary.avgTtftMs)} / ${topModel}`}
+          badge={latencyRanking[0] ? formatDuration(latencyRanking[0].maxLatencyMs) : '0ms'}
+          icon={<Clock className="size-5" />}
+        />
       </section>
 
-      <div className={styles.analyticsShell}>
-        <aside className={styles.insightRail}>
-          <div className={styles.railBlock}>
-            <span className={styles.railLabel}>{t('usage.capture_status', { defaultValue: '采集状态' })}</span>
-            <span className={`${styles.statusPill} ${usageDisabled ? styles.statusWarning : styles.statusOk}`}>
-              {usageDisabled
-                ? t('usage.capture_disabled', { defaultValue: '未启用' })
-                : t('usage.capture_ready', { defaultValue: '已就绪' })}
-            </span>
+      <Card className="rounded-lg">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>{t('usage.token_curve', { defaultValue: 'Token 曲线' })}</CardTitle>
+            <CardDescription>
+              {t('usage.token_curve_subtitle', { defaultValue: 'Input / Output / Reasoning 聚合' })}
+            </CardDescription>
           </div>
-          <div className={styles.railBlock}>
-            <span className={styles.railLabel}>{t('usage.cached_events', { defaultValue: '本地事件' })}</span>
-            <strong>{formatCompactNumber(events.length)}</strong>
-            <span className={styles.railHint}>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-slate-900" />Total</span>
+            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-blue-600" />Input</span>
+            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-emerald-500" />Output</span>
+            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-violet-500" />Reasoning</span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <TokenAreaChart data={tokenSeries} />
+        </CardContent>
+      </Card>
+
+      <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>{t('usage.model_distribution', { defaultValue: '模型调用分布' })}</CardTitle>
+            <CardDescription>Models ranked by request volume from the local usage queue.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DistributionBars groups={modelDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>{t('usage.latency_ranking', { defaultValue: '延迟排行' })}</CardTitle>
+            <CardDescription>Average latency grouped by provider and model.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <LatencyList groups={latencyRanking} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>{t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}</CardTitle>
+            <CardDescription>Requests grouped by upstream provider.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DistributionBars groups={providerDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
+          </CardContent>
+        </Card>
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>{t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}</CardTitle>
+            <CardDescription>Requests grouped by API endpoint.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DistributionBars groups={endpointDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
+          </CardContent>
+        </Card>
+      </section>
+
+      <Card className="rounded-lg">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>{t('usage.recent_requests', { defaultValue: '最近请求' })}</CardTitle>
+            <CardDescription>
               {lastLoadedAt
                 ? t('usage.last_loaded', {
                     defaultValue: '最近 {{time}}',
                     time: formatTime(lastLoadedAt, i18n.language),
                   })
                 : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
-            </span>
+            </CardDescription>
           </div>
-          <div className={styles.railBlock}>
-            <span className={styles.railLabel}>{t('usage.slowest_route', { defaultValue: '最慢路由' })}</span>
-            <strong className={styles.railValueSmall} title={slowestRoute}>
-              {slowestRoute}
-            </strong>
-            <span className={styles.railHint}>
-              {latencyRanking[0]
-                ? formatDuration(latencyRanking[0].avgLatencyMs)
-                : t('usage.empty_short', { defaultValue: '暂无数据' })}
-            </span>
-          </div>
-          <div className={styles.railBlock}>
-            <span className={styles.railLabel}>{t('usage.providers', { defaultValue: 'Provider' })}</span>
-            <div className={styles.providerStack}>
-              {providerDistribution.length === 0 ? (
-                <span className={styles.railHint}>{t('usage.empty_short', { defaultValue: '暂无数据' })}</span>
-              ) : (
-                providerDistribution.map((provider) => (
-                  <div key={provider.key} className={styles.providerRow}>
-                    <span>{provider.label}</span>
-                    <strong>{formatCompactNumber(provider.requests)}</strong>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-          <div className={styles.railBlock}>
-            <span className={styles.railLabel}>{t('usage.auth_type', { defaultValue: '认证类型' })}</span>
-            <div className={styles.providerStack}>
-              {authDistribution.length === 0 ? (
-                <span className={styles.railHint}>{t('usage.empty_short', { defaultValue: '暂无数据' })}</span>
-              ) : (
-                authDistribution.map((auth) => (
-                  <div key={auth.key} className={styles.providerRow}>
-                    <span>{auth.label}</span>
-                    <strong>{formatCompactNumber(auth.requests)}</strong>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </aside>
-
-        <main className={styles.contentPanel}>
-          {error && <div className={styles.errorBanner}>{error}</div>}
-
-          <section className={styles.metricsGrid} id="usage-overview">
-            <MetricTile
-              label={t('usage.total_requests', { defaultValue: '请求数' })}
-              value={formatCompactNumber(summary.requests)}
-              detail={`${formatCompactNumber(summary.successes)} ${t('common.success')} · ${formatCompactNumber(summary.failures)} ${t('common.failure')}`}
-              meta={formatRate(summary.requests, range)}
-              icon={<IconTrendingUp size={20} />}
-              tone="neutral"
-            />
-            <MetricTile
-              label={t('usage.success_rate', { defaultValue: '成功率' })}
-              value={formatPercent(summary.successRate)}
-              detail={t('usage.failure_count', {
-                defaultValue: '{{count}} 次失败',
-                count: formatCompactNumber(summary.failures),
-              })}
-              meta={formatPercent(100 - summary.successRate)}
-              icon={<IconCheckCircle2 size={20} />}
-              tone={failureTone}
-            />
-            <MetricTile
-              label={t('usage.total_tokens', { defaultValue: 'Token 总量' })}
-              value={formatCompactNumber(summary.tokens.totalTokens)}
-              detail={`I ${formatCompactNumber(summary.tokens.inputTokens)} · O ${formatCompactNumber(summary.tokens.outputTokens)} · R ${formatCompactNumber(summary.tokens.reasoningTokens)}`}
-              meta={t('usage.cached_tokens_short', {
-                defaultValue: 'Cache {{count}}',
-                count: formatCompactNumber(summary.tokens.cachedTokens + summary.tokens.cacheReadTokens),
-              })}
-              icon={<IconChartLine size={20} />}
-              tone="success"
-            />
-            <MetricTile
-              label={t('usage.avg_latency', { defaultValue: '平均延迟' })}
-              value={formatDuration(summary.avgLatencyMs)}
-              detail={`TTFT ${formatDuration(summary.avgTtftMs)}`}
-              meta={
-                latencyRanking[0]
-                  ? formatDuration(latencyRanking[0].maxLatencyMs)
-                  : t('usage.empty_short', { defaultValue: '暂无数据' })
-              }
-              icon={<IconTimer size={20} />}
-              tone="neutral"
-            />
-          </section>
-
-          <section className={`${styles.panel} ${styles.chartPanel}`} id="usage-token">
-            <div className={styles.panelHeader}>
-              <div>
-                <h2>{t('usage.token_curve', { defaultValue: 'Token 曲线' })}</h2>
-                <span>{t('usage.token_curve_subtitle', { defaultValue: 'Input / Output / Reasoning 聚合' })}</span>
-              </div>
-              <div className={styles.chartLegend} aria-hidden="true">
-                <span><i className={styles.legendTotal} />Total</span>
-                <span><i className={styles.legendInput} />Input</span>
-                <span><i className={styles.legendOutput} />Output</span>
-                <span><i className={styles.legendReasoning} />Reasoning</span>
-              </div>
-            </div>
-            {tokenSeries.length === 0 || summary.requests === 0 ? (
-              <ChartEmptySkeleton
-                title={t('usage.empty_title', { defaultValue: '暂无统计数据' })}
-                description={t('usage.empty_desc', {
-                  defaultValue: '产生新的模型请求后，这里会显示实时用量。',
-                })}
-              />
+          <Badge variant={failedEvents.length > 0 ? 'warning' : 'success'} className="w-fit rounded-full">
+            {failedEvents.length > 0 ? (
+              <span className="inline-flex items-center gap-1.5"><AlertTriangle className="size-3.5" />{failedEvents.length} failed</span>
             ) : (
-              <TokenLineChart data={tokenSeries} />
+              <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="size-3.5" />No failures</span>
             )}
-            <div className={styles.tokenBreakdownGrid}>
-              <TokenBreakdownCard
-                label={t('usage.input_tokens', { defaultValue: 'Input' })}
-                value={summary.tokens.inputTokens}
-                total={summary.tokens.totalTokens}
-                tone="input"
-              />
-              <TokenBreakdownCard
-                label={t('usage.output_tokens', { defaultValue: 'Output' })}
-                value={summary.tokens.outputTokens}
-                total={summary.tokens.totalTokens}
-                tone="output"
-              />
-              <TokenBreakdownCard
-                label={t('usage.reasoning_tokens', { defaultValue: 'Reasoning' })}
-                value={summary.tokens.reasoningTokens}
-                total={summary.tokens.totalTokens}
-                tone="reasoning"
-              />
-              <TokenBreakdownCard
-                label={t('usage.cache_tokens', { defaultValue: 'Cache' })}
-                value={summary.tokens.cachedTokens + summary.tokens.cacheReadTokens + summary.tokens.cacheCreationTokens}
-                total={summary.tokens.totalTokens}
-                tone="cache"
-              />
-            </div>
-          </section>
-
-          <div className={styles.twoColumnGrid} id="usage-distribution">
-            <DistributionPanel
-              title={t('usage.model_distribution', { defaultValue: '模型调用分布' })}
-              caption={t('usage.model_distribution_caption', { defaultValue: '按请求量排序' })}
-              groups={modelDistribution}
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
-            <RankingList
-              title={t('usage.latency_ranking', { defaultValue: '延迟排行' })}
-              caption={t('usage.latency_ranking_caption', { defaultValue: '按平均延迟排序' })}
-              groups={latencyRanking}
-              metric="latency"
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
-          </div>
-
-          <div className={styles.threeColumnGrid}>
-            <DistributionPanel
-              title={t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}
-              caption={t('usage.endpoint_distribution_caption', { defaultValue: '按接口路径聚合' })}
-              groups={endpointDistribution}
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
-            <DistributionPanel
-              title={t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}
-              caption={t('usage.provider_distribution_caption', { defaultValue: '按上游提供商聚合' })}
-              groups={providerDistribution}
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
-            <DistributionPanel
-              title={t('usage.executor_distribution', { defaultValue: 'Executor 分布' })}
-              caption={t('usage.executor_distribution_caption', { defaultValue: '按执行器类型聚合' })}
-              groups={executorDistribution}
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
-          </div>
-
-          <section className={styles.panel}>
-            <div className={styles.panelHeader}>
-              <div>
-                <h2>{t('usage.recent_requests', { defaultValue: '最近请求' })}</h2>
-                <span>{t('usage.recent_requests_caption', { defaultValue: '最近 {{count}} 条事件', count: RECENT_REQUEST_LIMIT })}</span>
-              </div>
-            </div>
-            <RecentRequestsTable
-              events={recentEvents}
-              locale={i18n.language}
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
-          </section>
-
-          <section className={styles.panel} id="usage-failures">
-            <div className={styles.panelHeader}>
-              <div>
-                <h2>{t('usage.failure_tracking', { defaultValue: '失败请求追踪' })}</h2>
-                <span>{t('usage.failure_tracking_subtitle', { defaultValue: '按最近失败时间排序' })}</span>
-              </div>
-              <DataChip
-                label={t('usage.failure_count_label', { defaultValue: '失败数' })}
-                value={formatCompactNumber(failedEvents.length)}
-                tone={failedEvents.length > 0 ? 'warning' : 'success'}
-              />
-            </div>
-            {failedEvents.length === 0 ? (
-              <div className={styles.cleanState}>
-                <IconCheckCircle2 size={18} />
-                <span>{t('usage.no_failures', { defaultValue: '当前范围内没有失败请求' })}</span>
-              </div>
-            ) : (
-              <div className={styles.failureTableWrap}>
-                <table className={styles.failureTable}>
-                  <thead>
-                    <tr>
-                      <th>{t('usage.time', { defaultValue: '时间' })}</th>
-                      <th>{t('usage.status', { defaultValue: '状态' })}</th>
-                      <th>{t('usage.provider_model', { defaultValue: 'Provider / 模型' })}</th>
-                      <th>{t('usage.request_id', { defaultValue: 'Request ID' })}</th>
-                      <th>{t('usage.error_body', { defaultValue: '错误' })}</th>
-                      <th>{t('common.action')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {failedEvents.map((event) => (
-                      <tr key={event.id}>
-                        <td>{formatTime(event.timestampMs, i18n.language)}</td>
-                        <td>
-                          <span className={styles.statusCode}>
-                            <IconAlertTriangle size={14} />
-                            {event.failStatusCode}
-                          </span>
-                        </td>
-                        <td>
-                          <div className={styles.tableMainCell}>
-                            <strong>{event.provider}</strong>
-                            <span>{event.alias || event.model}</span>
-                          </div>
-                        </td>
-                        <td>
-                          <span className={styles.requestId} title={event.requestId || '-'}>
-                            {event.requestId || '-'}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={styles.failBody} title={event.failBody}>
-                            {event.failBody || '-'}
-                          </span>
-                        </td>
-                        <td>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => downloadRequestLog(event)}
-                            disabled={!event.requestId}
-                            title={t('logs.request_log_download_title')}
-                            aria-label={t('logs.request_log_download_title')}
-                          >
-                            <IconDownload size={16} />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        </main>
-      </div>
+          </Badge>
+        </CardHeader>
+        <CardContent>
+          <RecentEventsTable
+            events={recentEvents}
+            locale={i18n.language}
+            emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+            onDownload={downloadRequestLog}
+          />
+        </CardContent>
+      </Card>
     </div>
   );
 }

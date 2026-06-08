@@ -9,7 +9,8 @@ import {
 } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/Button';
+import { Button } from '@/components/shadcn/ui/button';
+import { Separator } from '@/components/shadcn/ui/separator';
 import { PageTransition } from '@/components/common/PageTransition';
 import { MainRoutes } from '@/router/MainRoutes';
 import {
@@ -34,6 +35,7 @@ import {
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
+import { cn } from '@/lib/utils';
 import type { Theme } from '@/types';
 
 const sidebarIcons: Record<string, ReactNode> = {
@@ -546,222 +548,246 @@ export function MainLayout() {
     : t('sidebar.toggle_expand', { defaultValue: 'Open navigation' });
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
-      <div className="top-gradient-blur" aria-hidden="true" />
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <button
+        type="button"
+        className={cn(
+          'fixed inset-0 z-30 bg-black/45 backdrop-blur-sm transition-opacity md:hidden',
+          sidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+        )}
+        onClick={() => setSidebarOpen(false)}
+        aria-label={t('common.close')}
+        aria-hidden={!sidebarOpen}
+        tabIndex={sidebarOpen ? 0 : -1}
+      />
 
-      <header className="main-header" ref={headerRef}>
-        <button
-          type="button"
-          className="sidebar-toggle-floating"
-          onClick={() => setSidebarCollapsed((prev) => !prev)}
-          title={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
-          aria-label={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
-        >
-          {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
-        </button>
-
-        <div className="mobile-sidebar-actions">
-          <Button
-            className="mobile-menu-btn"
-            variant="ghost"
-            size="sm"
-            onClick={() => setSidebarOpen((prev) => !prev)}
-            title={mobileSidebarToggleLabel}
-            aria-label={mobileSidebarToggleLabel}
-          >
-            {sidebarOpen ? headerIcons.close : headerIcons.menu}
-          </Button>
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r bg-card transition-transform duration-300 md:static md:translate-x-0',
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+          sidebarCollapsed ? 'md:w-[72px]' : 'md:w-72'
+        )}
+      >
+        <div className="flex h-16 shrink-0 items-center gap-3 px-4" title={fullBrandName}>
+          <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="size-9 rounded-md object-contain" />
+          {showSidebarLabels && (
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold tracking-normal">{abbrBrandName}</div>
+              <div className="truncate text-xs text-muted-foreground">Management Center</div>
+            </div>
+          )}
         </div>
+        <Separator />
 
-        <div className="header-actions floating-actions">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleRefreshAll}
-            title={t('header.refresh_all')}
-          >
-            {headerIcons.refresh}
-          </Button>
-          <div className={`language-menu ${languageMenuOpen ? 'open' : ''}`} ref={languageMenuRef}>
+        <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
+          {navGroups.map((group, idx) => (
+            <div key={group.id} className="space-y-1">
+              {showSidebarLabels ? (
+                <div className="px-2 pb-1 text-[11px] font-medium uppercase text-muted-foreground">
+                  {t(group.labelKey)}
+                </div>
+              ) : (
+                idx > 0 && <Separator className="mx-auto my-3 w-8" />
+              )}
+              {group.items.map((item) => {
+                const itemLabel = t(item.labelKey);
+                return (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    onClick={() => setSidebarOpen(false)}
+                    title={showSidebarLabels ? undefined : itemLabel}
+                    className={({ isActive }) =>
+                      cn(
+                        'group flex min-h-11 items-center gap-3 rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
+                        isActive && 'bg-accent text-accent-foreground shadow-sm',
+                        !showSidebarLabels && 'justify-center px-0'
+                      )
+                    }
+                  >
+                    <span className="grid size-8 shrink-0 place-items-center rounded-md border bg-background text-foreground shadow-sm">
+                      {item.icon}
+                    </span>
+                    {showSidebarLabels && (
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm leading-5">{itemLabel}</span>
+                        <span className="block truncate text-xs font-normal text-muted-foreground">
+                          {t(item.metaKey)}
+                        </span>
+                      </span>
+                    )}
+                  </NavLink>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="content flex min-w-0 flex-1 flex-col overflow-y-auto" ref={contentRef}>
+        <header
+          className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-background/88 px-4 backdrop-blur md:px-6"
+          ref={headerRef}
+        >
+          <div className="flex min-w-0 items-center gap-2">
             <Button
               variant="ghost"
-              size="sm"
-              onClick={toggleLanguageMenu}
-              title={t('language.switch')}
-              aria-label={t('language.switch')}
-              aria-haspopup="menu"
-              aria-expanded={languageMenuOpen}
+              size="icon"
+              className="md:hidden"
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              title={mobileSidebarToggleLabel}
+              aria-label={mobileSidebarToggleLabel}
             >
-              {headerIcons.language}
+              {sidebarOpen ? headerIcons.close : headerIcons.menu}
             </Button>
-            {languageMenuOpen && (
-              <div
-                className="notification entering language-menu-popover"
-                role="menu"
-                aria-label={t('language.switch')}
-              >
-                {LANGUAGE_ORDER.map((lang) => (
-                  <button
-                    key={lang}
-                    type="button"
-                    className={`language-menu-option ${language === lang ? 'active' : ''}`}
-                    onClick={() => handleLanguageSelect(lang)}
-                    role="menuitemradio"
-                    aria-checked={language === lang}
-                  >
-                    <span>{t(LANGUAGE_LABEL_KEYS[lang])}</span>
-                    {language === lang ? <span className="language-menu-check">✓</span> : null}
-                  </button>
-                ))}
-              </div>
-            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hidden md:inline-flex"
+              onClick={() => setSidebarCollapsed((prev) => !prev)}
+              title={
+                sidebarCollapsed
+                  ? t('sidebar.expand', { defaultValue: '展开' })
+                  : t('sidebar.collapse', { defaultValue: '收起' })
+              }
+              aria-label={
+                sidebarCollapsed
+                  ? t('sidebar.expand', { defaultValue: '展开' })
+                  : t('sidebar.collapse', { defaultValue: '收起' })
+              }
+            >
+              {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
+            </Button>
+            <Separator orientation="vertical" className="hidden h-6 md:block" />
+            <div className="min-w-0 text-sm font-medium text-muted-foreground">
+              {fullBrandName}
+            </div>
           </div>
-          <div className={`theme-menu ${themeMenuOpen ? 'open' : ''}`} ref={themeMenuRef}>
+
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
-              size="sm"
-              onClick={toggleThemeMenu}
-              title={t('theme.switch')}
-              aria-label={t('theme.switch')}
-              aria-haspopup="menu"
-              aria-expanded={themeMenuOpen}
+              size="icon"
+              onClick={handleRefreshAll}
+              title={t('header.refresh_all')}
+              aria-label={t('header.refresh_all')}
             >
-              {theme === 'auto'
-                ? headerIcons.autoTheme
-                : theme === 'dark'
-                  ? headerIcons.moon
-                  : theme === 'white'
-                    ? headerIcons.whiteTheme
-                    : headerIcons.sun}
+              {headerIcons.refresh}
             </Button>
-            {themeMenuOpen && (
-              <div
-                className="notification entering theme-menu-popover"
-                role="menu"
-                aria-label={t('theme.switch')}
+
+            <div className="relative" ref={languageMenuRef}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleLanguageMenu}
+                title={t('language.switch')}
+                aria-label={t('language.switch')}
+                aria-haspopup="menu"
+                aria-expanded={languageMenuOpen}
               >
-                {THEME_CARDS.map((tc) => (
-                  <button
-                    key={tc.key}
-                    type="button"
-                    className={`theme-card ${theme === tc.key ? 'active' : ''}`}
-                    onClick={() => handleThemeSelect(tc.key)}
-                    role="menuitemradio"
-                    aria-checked={theme === tc.key}
-                  >
-                    <div
-                      className="theme-card-preview"
-                      style={{
-                        background: tc.colors.bg,
-                        border: `1px solid ${tc.colors.border}`,
-                      }}
+                {headerIcons.language}
+              </Button>
+              {languageMenuOpen && (
+                <div
+                  className="absolute right-0 top-[calc(100%+8px)] z-50 min-w-44 rounded-lg border bg-popover p-1 text-popover-foreground shadow-md"
+                  role="menu"
+                  aria-label={t('language.switch')}
+                >
+                  {LANGUAGE_ORDER.map((lang) => (
+                    <button
+                      key={lang}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground',
+                        language === lang && 'font-semibold text-foreground'
+                      )}
+                      onClick={() => handleLanguageSelect(lang)}
+                      role="menuitemradio"
+                      aria-checked={language === lang}
+                    >
+                      <span>{t(LANGUAGE_LABEL_KEYS[lang])}</span>
+                      {language === lang && <span aria-hidden="true">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="relative" ref={themeMenuRef}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleThemeMenu}
+                title={t('theme.switch')}
+                aria-label={t('theme.switch')}
+                aria-haspopup="menu"
+                aria-expanded={themeMenuOpen}
+              >
+                {theme === 'auto'
+                  ? headerIcons.autoTheme
+                  : theme === 'dark'
+                    ? headerIcons.moon
+                    : theme === 'white'
+                      ? headerIcons.whiteTheme
+                      : headerIcons.sun}
+              </Button>
+              {themeMenuOpen && (
+                <div
+                  className="absolute right-0 top-[calc(100%+8px)] z-50 grid w-[232px] grid-cols-2 gap-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-md"
+                  role="menu"
+                  aria-label={t('theme.switch')}
+                >
+                  {THEME_CARDS.map((tc) => (
+                    <button
+                      key={tc.key}
+                      type="button"
+                      className={cn(
+                        'rounded-md border p-2 text-left text-xs transition-colors hover:bg-accent',
+                        theme === tc.key && 'border-ring bg-accent'
+                      )}
+                      onClick={() => handleThemeSelect(tc.key)}
+                      role="menuitemradio"
+                      aria-checked={theme === tc.key}
                     >
                       <div
-                        className="theme-card-header"
-                        style={{
-                          background: tc.colors.card,
-                          borderBottom: `1px solid ${tc.colors.border}`,
-                        }}
-                      />
-                      <div className="theme-card-body">
-                        <div
-                          className="theme-card-sidebar"
-                          style={{
-                            background: tc.colors.card,
-                            borderRight: `1px solid ${tc.colors.border}`,
-                          }}
-                        />
-                        <div className="theme-card-content" style={{ background: tc.colors.bg }}>
-                          <div
-                            className="theme-card-line"
-                            style={{ background: tc.colors.textMuted }}
-                          />
-                          <div
-                            className="theme-card-line short"
-                            style={{ background: tc.colors.textMuted }}
-                          />
+                        className="mb-2 h-10 overflow-hidden rounded border"
+                        style={{ background: tc.colors.bg, borderColor: tc.colors.border }}
+                      >
+                        <div className="h-2" style={{ background: tc.colors.card }} />
+                        <div className="flex h-8">
+                          <div className="w-4" style={{ background: tc.colors.card }} />
+                          <div className="flex flex-1 flex-col justify-center gap-1 px-2">
+                            <span className="h-1 rounded" style={{ background: tc.colors.textMuted }} />
+                            <span className="h-1 w-2/3 rounded" style={{ background: tc.colors.textMuted }} />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <span className="theme-card-label">{t(tc.labelKey)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+                      <span className="font-medium">{t(tc.labelKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Button variant="ghost" size="icon" onClick={logout} title={t('header.logout')} aria-label={t('header.logout')}>
+              {headerIcons.logout}
+            </Button>
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} title={t('header.logout')}>
-            {headerIcons.logout}
-          </Button>
-        </div>
-      </header>
+        </header>
 
-      <div className="main-body">
-        <button
-          type="button"
-          className={`sidebar-backdrop ${sidebarOpen ? 'visible' : ''}`}
-          onClick={() => setSidebarOpen(false)}
-          aria-label={t('common.close')}
-          aria-hidden={!sidebarOpen}
-          tabIndex={sidebarOpen ? 0 : -1}
-        />
-
-        <aside
-          className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}
+        <main
+          className={cn(
+            'flex min-h-full flex-1 flex-col p-4 md:p-6',
+            isLogsPage && 'min-h-0 overflow-hidden p-0 md:p-0'
+          )}
         >
-          <div className="sidebar-brand" title={fullBrandName}>
-            <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
-            {showSidebarLabels && <span className="sidebar-brand-title">{abbrBrandName}</span>}
-          </div>
-
-          <div className="nav-section">
-            {navGroups.map((group, idx) => (
-              <div className="nav-group" key={group.id}>
-                {showSidebarLabels
-                  ? <div className="nav-group-label">{t(group.labelKey)}</div>
-                  : idx > 0 && <div className="nav-group-divider" aria-hidden="true" />}
-                {group.items.map((item) => {
-                  const itemLabel = t(item.labelKey);
-                  return (
-                    <NavLink
-                      key={item.path}
-                      to={item.path}
-                      className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-                      onClick={() => setSidebarOpen(false)}
-                      title={showSidebarLabels ? undefined : itemLabel}
-                    >
-                      <span className="nav-icon">{item.icon}</span>
-                      {showSidebarLabels && (
-                        <span className="nav-text">
-                          <span className="nav-label">{itemLabel}</span>
-                          <span className="nav-meta">{t(item.metaKey)}</span>
-                        </span>
-                      )}
-                    </NavLink>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </aside>
-
-        <div className={`content${isLogsPage ? ' content-logs' : ''}`} ref={contentRef}>
-          <main className={`main-content${isLogsPage ? ' main-content-logs' : ''}`}>
-            <PageTransition
-              render={(location) => <MainRoutes location={location} />}
-              getRouteOrder={getRouteOrder}
-              getTransitionVariant={getTransitionVariant}
-              scrollContainerRef={contentRef}
-            />
-          </main>
-        </div>
+          <PageTransition
+            render={(location) => <MainRoutes location={location} />}
+            getRouteOrder={getRouteOrder}
+            getTransitionVariant={getTransitionVariant}
+            scrollContainerRef={contentRef}
+          />
+        </main>
       </div>
     </div>
   );
