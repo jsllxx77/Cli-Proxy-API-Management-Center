@@ -14,18 +14,6 @@ import {
   TrendingUp,
   Zap,
 } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ResponsiveContainer,
-  Tooltip as RechartsTooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import { Badge } from '@/components/shadcn/ui/badge';
 import { Button } from '@/components/shadcn/ui/button';
 import {
@@ -113,11 +101,6 @@ const formatTime = (timestampMs: number, locale: string) => {
 
 const compactLabel = (value: string, fallback = 'unknown') => value.trim() || fallback;
 
-const tooltipNumber = (value: unknown) => {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
 function MetricCard({
   title,
   value,
@@ -196,55 +179,89 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
     );
   }
 
+  const width = 960;
+  const height = 320;
+  const padding = { top: 24, right: 24, bottom: 38, left: 58 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const bottom = padding.top + plotHeight;
+  const maxValue = Math.max(...chartData.map((point) => point.total), 1);
+  const xFor = (index: number) =>
+    padding.left + (plotWidth * index) / Math.max(1, chartData.length - 1);
+  const yFor = (value: number) => bottom - (Math.max(0, value) / maxValue) * plotHeight;
+  const linePoints = (key: 'total' | 'input' | 'output' | 'reasoning') =>
+    chartData.map((point, index) => `${xFor(index)},${yFor(point[key])}`).join(' ');
+  const totalPoints = linePoints('total');
+  const totalArea = `${padding.left},${bottom} ${totalPoints} ${padding.left + plotWidth},${bottom}`;
+  const xTickStep = Math.max(1, Math.ceil(chartData.length / 6));
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    y: bottom - ratio * plotHeight,
+    label: formatCompactNumber(maxValue * ratio),
+  }));
+
   return (
-    <div className="h-[360px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ left: 4, right: 8, top: 10, bottom: 0 }}>
-          <defs>
-            <linearGradient id="tokenTotalFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#0f172a" stopOpacity={0.34} />
-              <stop offset="95%" stopColor="#0f172a" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
-          <XAxis
-            dataKey="label"
-            tickLine={false}
-            axisLine={false}
-            tickMargin={10}
-            minTickGap={28}
-            tick={{ fill: 'var(--text-tertiary)', fontSize: 12 }}
-          />
-          <YAxis
-            tickLine={false}
-            axisLine={false}
-            tickFormatter={(value: number) => formatCompactNumber(value)}
-            tick={{ fill: 'var(--text-tertiary)', fontSize: 12 }}
-            width={44}
-          />
-          <RechartsTooltip
-            cursor={{ stroke: 'var(--border-color)' }}
-            formatter={(value, name) => [formatCompactNumber(tooltipNumber(value)), String(name)]}
-            contentStyle={{
-              background: 'var(--bg-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 8,
-              color: 'var(--text-primary)',
-            }}
-          />
-          <Area
-            type="monotone"
-            dataKey="total"
-            name="Total"
-            stroke="#0f172a"
-            strokeWidth={2}
-            fill="url(#tokenTotalFill)"
-          />
-          <Area type="monotone" dataKey="input" name="Input" stroke="#2563eb" strokeWidth={1.5} fill="transparent" />
-          <Area type="monotone" dataKey="output" name="Output" stroke="#10b981" strokeWidth={1.5} fill="transparent" />
-          <Area type="monotone" dataKey="reasoning" name="Reasoning" stroke="#8b5cf6" strokeWidth={1.5} fill="transparent" />
-        </AreaChart>
-      </ResponsiveContainer>
+    <div className="h-[360px] w-full overflow-hidden rounded-lg border bg-background">
+      <svg
+        className="h-full w-full"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Token usage trend"
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="tokenTotalFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#0f172a" stopOpacity={0.22} />
+            <stop offset="95%" stopColor="#0f172a" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <rect width={width} height={height} fill="var(--bg-primary)" />
+        {yTicks.map((tick) => (
+          <g key={tick.label}>
+            <line
+              x1={padding.left}
+              x2={padding.left + plotWidth}
+              y1={tick.y}
+              y2={tick.y}
+              stroke="var(--border-color)"
+              strokeDasharray="4 6"
+            />
+            <text
+              x={padding.left - 12}
+              y={tick.y + 4}
+              textAnchor="end"
+              fill="var(--text-tertiary)"
+              fontSize="12"
+            >
+              {tick.label}
+            </text>
+          </g>
+        ))}
+        <polygon points={totalArea} fill="url(#tokenTotalFill)" />
+        <polyline points={totalPoints} fill="none" stroke="#0f172a" strokeWidth="3" strokeLinejoin="round" />
+        <polyline points={linePoints('input')} fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round" />
+        <polyline points={linePoints('output')} fill="none" stroke="#10b981" strokeWidth="2" strokeLinejoin="round" />
+        <polyline points={linePoints('reasoning')} fill="none" stroke="#8b5cf6" strokeWidth="2" strokeLinejoin="round" />
+        {chartData.map((point, index) => (
+          <g key={`${point.label}-${index}`}>
+            {index % xTickStep === 0 || index === chartData.length - 1 ? (
+              <text
+                x={xFor(index)}
+                y={height - 12}
+                textAnchor={index === 0 ? 'start' : index === chartData.length - 1 ? 'end' : 'middle'}
+                fill="var(--text-tertiary)"
+                fontSize="12"
+              >
+                {point.label}
+              </text>
+            ) : null}
+            <circle cx={xFor(index)} cy={yFor(point.total)} r="3" fill="#0f172a">
+              <title>
+                {point.label}: {formatCompactNumber(point.total)} tokens / {formatCompactNumber(point.requests)} req
+              </title>
+            </circle>
+          </g>
+        ))}
+      </svg>
     </div>
   );
 }
@@ -258,74 +275,51 @@ function DistributionBars({
   emptyText: string;
   metric?: 'requests' | 'tokens' | 'latency';
 }) {
-  const chartData = groups.map((group, index) => ({
-    name: group.label,
-    value:
+  const rows = groups.map((group, index) => {
+    const value =
       metric === 'tokens'
         ? group.totalTokens
         : metric === 'latency'
           ? Math.round(group.avgLatencyMs)
-          : group.requests,
-    color: chartPalette[index % chartPalette.length],
-  }));
+          : group.requests;
+    return {
+      group,
+      value,
+      color: chartPalette[index % chartPalette.length],
+    };
+  });
+  const maxValue = Math.max(...rows.map((row) => row.value), 1);
 
-  if (!chartData.length) {
+  if (!rows.length) {
     return <div className="py-8 text-sm text-muted-foreground">{emptyText}</div>;
   }
 
   return (
-    <div className="space-y-4">
-      <div className="h-[220px]">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={chartData} layout="vertical" margin={{ left: 4, right: 12, top: 4, bottom: 4 }}>
-            <CartesianGrid horizontal={false} stroke="var(--border-color)" />
-            <XAxis type="number" hide />
-            <YAxis
-              dataKey="name"
-              type="category"
-              tickLine={false}
-              axisLine={false}
-              width={86}
-              tick={{ fill: 'var(--text-tertiary)', fontSize: 12 }}
-            />
-            <RechartsTooltip
-              cursor={{ fill: 'color-mix(in srgb, var(--bg-secondary) 60%, transparent)' }}
-              formatter={(value) => [
-                metric === 'latency'
-                  ? formatDuration(tooltipNumber(value))
-                  : formatCompactNumber(tooltipNumber(value)),
-                metric === 'tokens' ? 'Tokens' : metric === 'latency' ? 'Latency' : 'Requests',
-              ]}
-              contentStyle={{
-                background: 'var(--bg-primary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 8,
-              }}
-            />
-            <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={16}>
-              {chartData.map((entry) => (
-                <Cell key={entry.name} fill={entry.color} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="space-y-2">
-        {groups.slice(0, 5).map((group, index) => (
-          <div key={group.key} className="flex items-center justify-between gap-3 text-sm">
+    <div className="space-y-3">
+      {rows.map(({ group, value, color }) => (
+        <div key={group.key} className="space-y-2">
+          <div className="flex items-start justify-between gap-3 text-sm">
             <div className="flex min-w-0 items-center gap-2">
-              <span
-                className="size-2.5 shrink-0 rounded-sm"
-                style={{ background: chartPalette[index % chartPalette.length] }}
-              />
+              <span className="size-2.5 shrink-0 rounded-sm" style={{ background: color }} />
               <span className="truncate font-medium">{group.label}</span>
             </div>
-            <span className="shrink-0 text-muted-foreground">
-              {formatCompactNumber(group.requests)} req
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {metric === 'latency' ? formatDuration(value) : formatCompactNumber(value)}
             </span>
           </div>
-        ))}
-      </div>
+          <div className="h-9 rounded-md border bg-muted/35 p-1">
+            <div
+              className="flex h-full min-w-8 items-center justify-end rounded-sm px-2 text-[11px] font-medium text-white"
+              style={{
+                width: `${Math.max(8, (value / maxValue) * 100)}%`,
+                background: color,
+              }}
+            >
+              {formatCompactNumber(group.requests)}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
