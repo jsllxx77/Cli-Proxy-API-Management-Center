@@ -649,12 +649,6 @@ export function UsageAnalyticsPage() {
         </header>
 
         <div className={styles.secondaryBar}>
-          <nav className={styles.secondaryNav} aria-label={t('usage.sections', { defaultValue: '统计分区' })}>
-            <a href="#usage-overview">{t('usage.section_overview', { defaultValue: '总览' })}</a>
-            <a href="#usage-token">{t('usage.section_tokens', { defaultValue: 'Token' })}</a>
-            <a href="#usage-distribution">{t('usage.section_distribution', { defaultValue: '分布' })}</a>
-            <a href="#usage-failures">{t('usage.section_failures', { defaultValue: '失败' })}</a>
-          </nav>
           <div className={styles.rangeBar} role="tablist" aria-label={t('usage.range_label', { defaultValue: '时间范围' })}>
             {timeRangeOptions.map((option) => (
               <button
