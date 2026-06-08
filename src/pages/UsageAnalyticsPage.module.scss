@@ -3,9 +3,24 @@
 .usagePage {
   display: flex;
   flex-direction: column;
-  gap: $spacing-lg;
+  gap: $spacing-md;
   width: 100%;
   min-height: 0;
+}
+
+.pageInset {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  padding: $spacing-md;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+  border-radius: $radius-md;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 92%, transparent), var(--bg-primary)),
+    var(--bg-primary);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    0 18px 38px rgb(0 0 0 / 0.06);
 }
 
 .header {
@@ -17,7 +32,7 @@
   h1 {
     margin: 4px 0 0;
     color: var(--text-primary);
-    font-size: 30px;
+    font-size: 28px;
     line-height: 1.15;
     font-weight: 760;
   }
@@ -29,8 +44,19 @@
 }
 
 .breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+.headerMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: $spacing-sm;
+  margin-top: $spacing-md;
 }
 
 .headerActions {
@@ -57,10 +83,120 @@
   }
 }
 
+.dataChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-full;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+
+  span {
+    color: var(--text-tertiary);
+    font-weight: 650;
+  }
+
+  strong {
+    min-width: 0;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-primary);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.chipneutral {
+  background: var(--bg-secondary);
+}
+
+.chipsuccess {
+  border-color: var(--success-badge-border);
+  background: var(--success-badge-bg);
+
+  strong {
+    color: var(--success-badge-text);
+  }
+}
+
+.chipwarning,
+.chipdanger {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+
+  strong {
+    color: var(--warning-text);
+  }
+}
+
+.secondaryBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-md;
+  padding-top: $spacing-sm;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+
+  @include tablet {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  @include mobile {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.secondaryNav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: $radius-sm;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+
+    &:hover,
+    &:focus-visible {
+      color: var(--text-primary);
+      background: color-mix(in srgb, var(--bg-primary) 86%, transparent);
+      outline: none;
+    }
+  }
+
+  @include mobile {
+    overflow-x: auto;
+  }
+}
+
 .rangeBar {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  flex: 0 0 auto;
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--border-color);
@@ -100,10 +236,60 @@
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
 }
 
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: $spacing-sm;
+
+  @include tablet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.statusCard {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: $spacing-sm;
+  row-gap: 2px;
+  min-height: 62px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--bg-secondary) 84%, transparent);
+
+  svg {
+    grid-row: 1 / span 2;
+    align-self: center;
+    color: #0891b2;
+  }
+
+  span {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
 .analyticsShell {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
-  gap: $spacing-lg;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: $spacing-md;
   align-items: start;
   min-height: 0;
 
@@ -121,7 +307,9 @@
   padding: $spacing-md;
   border: 1px solid var(--border-color);
   border-radius: $radius-md;
-  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 88%, transparent), var(--bg-secondary)),
+    var(--bg-secondary);
   min-width: 0;
 
   @include tablet {
@@ -131,6 +319,7 @@
   }
 
   @include mobile {
+    position: static;
     grid-template-columns: 1fr;
   }
 }
@@ -147,6 +336,15 @@
     line-height: 1;
     font-variant-numeric: tabular-nums;
   }
+}
+
+.railValueSmall {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px !important;
+  line-height: 1.2 !important;
 }
 
 .railLabel {
@@ -169,10 +367,10 @@
   width: fit-content;
   min-height: 28px;
   padding: 0 10px;
+  border: 1px solid var(--border-color);
   border-radius: $radius-full;
   font-size: 12px;
   font-weight: 750;
-  border: 1px solid var(--border-color);
 }
 
 .statusOk {
@@ -218,7 +416,7 @@
 .contentPanel {
   display: flex;
   flex-direction: column;
-  gap: $spacing-lg;
+  gap: $spacing-md;
   min-width: 0;
 }
 
@@ -246,15 +444,37 @@
 }
 
 .metricTile {
+  position: relative;
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);
   gap: $spacing-md;
   align-items: start;
-  min-height: 122px;
+  min-height: 118px;
   padding: $spacing-md;
   border: 1px solid var(--border-color);
   border-radius: $radius-md;
   background: var(--bg-primary);
+  overflow: hidden;
+
+  &::after {
+    content: '';
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    width: 78px;
+    height: 26px;
+    border-radius: $radius-full;
+    background:
+      linear-gradient(
+        90deg,
+        transparent 0 14%,
+        color-mix(in srgb, var(--border-color) 70%, transparent) 14% 16%,
+        transparent 16% 32%
+      ),
+      color-mix(in srgb, var(--bg-secondary) 48%, transparent);
+    opacity: 0.52;
+    pointer-events: none;
+  }
 }
 
 .metricIcon {
@@ -310,6 +530,20 @@
   word-break: break-word;
 }
 
+.metricMeta {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
 .panel {
   min-width: 0;
   padding: $spacing-md;
@@ -338,10 +572,54 @@
     color: var(--text-tertiary);
     font-size: 12px;
   }
+
+  @include mobile {
+    flex-direction: column;
+  }
 }
 
 .chartPanel {
   overflow: hidden;
+}
+
+.chartLegend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: $spacing-sm;
+  flex-wrap: wrap;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+  }
+
+  i {
+    width: 8px;
+    height: 8px;
+    border-radius: $radius-full;
+  }
+}
+
+.legendTotal {
+  background: #0891b2;
+}
+
+.legendInput {
+  background: #2563eb;
+}
+
+.legendOutput {
+  background: #10b981;
+}
+
+.legendReasoning {
+  background: #8b5cf6;
 }
 
 .tokenChart {
@@ -379,18 +657,204 @@
   stroke-linejoin: round;
 }
 
+.chartLineThin {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
+}
+
+.chartLineInput {
+  stroke: #2563eb;
+}
+
+.chartLineOutput {
+  stroke: #10b981;
+}
+
+.chartLineReasoning {
+  stroke: #8b5cf6;
+}
+
 .chartPoint {
   fill: var(--bg-primary);
   stroke: #0891b2;
   stroke-width: 2;
 }
 
+.chartEmpty {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  border: 1px dashed var(--border-color);
+  border-radius: $radius-md;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 78%, transparent), transparent),
+    var(--bg-primary);
+  overflow: hidden;
+}
+
+.chartEmptyGrid {
+  position: absolute;
+  inset: 18px 18px 34px 44px;
+  display: grid;
+  grid-template-rows: repeat(4, 1fr);
+
+  span {
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+  }
+}
+
+.chartEmptyContent {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  max-width: min(520px, 100%);
+  padding: $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
+  color: var(--text-secondary);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.06);
+
+  svg {
+    flex: 0 0 auto;
+    color: #0891b2;
+  }
+
+  strong {
+    color: var(--text-primary);
+    font-size: 14px;
+  }
+
+  span {
+    color: var(--text-tertiary);
+    font-size: 13px;
+  }
+
+  @include mobile {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.tokenBreakdownGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: $spacing-sm;
+  margin-top: $spacing-md;
+
+  @include tablet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tokenBreakdownCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+
+  strong {
+    color: var(--text-primary);
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tokenBreakdownTop {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+
+  span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.tokenDot {
+  width: 8px;
+  height: 8px;
+  border-radius: $radius-full;
+  flex: 0 0 auto;
+}
+
+.tokenDotinput,
+.tokenFillinput {
+  background: #2563eb;
+}
+
+.tokenDotoutput,
+.tokenFilloutput {
+  background: #10b981;
+}
+
+.tokenDotreasoning,
+.tokenFillreasoning {
+  background: #8b5cf6;
+}
+
+.tokenDotcache,
+.tokenFillcache {
+  background: #f59e0b;
+}
+
+.tokenBreakdownTrack {
+  height: 7px;
+  border-radius: $radius-full;
+  background: color-mix(in srgb, var(--border-color) 56%, transparent);
+  overflow: hidden;
+
+  span {
+    display: block;
+    min-width: 0;
+    height: 100%;
+    border-radius: inherit;
+  }
+}
+
 .twoColumnGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: $spacing-lg;
+  gap: $spacing-md;
 
   @include tablet {
+    grid-template-columns: 1fr;
+  }
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.threeColumnGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: $spacing-md;
+
+  @include tablet {
+    grid-template-columns: 1fr;
+  }
+
+  @include mobile {
     grid-template-columns: 1fr;
   }
 }
@@ -473,6 +937,96 @@
   background: linear-gradient(90deg, #0891b2, #10b981);
 }
 
+.distributionList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.distributionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px $spacing-md;
+  align-items: center;
+}
+
+.distributionMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 750;
+
+  span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.distributionSwatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.swatch0 {
+  background: #0891b2;
+}
+
+.swatch1 {
+  background: #10b981;
+}
+
+.swatch2 {
+  background: #8b5cf6;
+}
+
+.swatch3 {
+  background: #f59e0b;
+}
+
+.swatch4 {
+  background: #ef4444;
+}
+
+.swatch5 {
+  background: #2563eb;
+}
+
+.distributionMeasure {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+
+  strong {
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+}
+
+.distributionTrack {
+  grid-column: 1 / -1;
+  height: 7px;
+  border-radius: $radius-full;
+  background: var(--bg-secondary);
+  overflow: hidden;
+
+  span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #0891b2, #10b981);
+  }
+}
+
 .cleanState {
   display: flex;
   align-items: center;
@@ -486,15 +1040,17 @@
   font-weight: 700;
 }
 
+.compactTableWrap,
 .failureTableWrap {
   overflow-x: auto;
   border: 1px solid var(--border-color);
   border-radius: $radius-md;
 }
 
+.compactTable,
 .failureTable {
   width: 100%;
-  min-width: 900px;
+  min-width: 860px;
   border-collapse: collapse;
   font-size: 12.5px;
 
@@ -520,6 +1076,31 @@
   tbody tr:last-child td {
     border-bottom: 0;
   }
+}
+
+.eventStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-full;
+  font-size: 12px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.eventOk {
+  color: var(--success-badge-text);
+  background: var(--success-badge-bg);
+  border-color: var(--success-badge-border);
+}
+
+.eventFailed {
+  color: var(--failure-badge-text);
+  background: var(--failure-badge-bg);
+  border-color: var(--failure-badge-border);
 }
 
 .statusCode {

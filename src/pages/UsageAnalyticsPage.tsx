@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
-import { EmptyState } from '@/components/ui/EmptyState';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import {
   IconAlertTriangle,
   IconChartLine,
   IconCheckCircle2,
   IconDownload,
+  IconInfo,
+  IconNetwork,
   IconRefreshCw,
+  IconSlidersHorizontal,
   IconTimer,
   IconTrash2,
   IconTrendingUp,
@@ -41,6 +43,7 @@ import styles from './UsageAnalyticsPage.module.scss';
 
 const POLL_INTERVAL_MS = 5000;
 const USAGE_QUEUE_COUNT = 300;
+const RECENT_REQUEST_LIMIT = 10;
 
 const timeRangeOptions: Array<{ value: UsageTimeRange; labelKey: string; fallback: string }> = [
   { value: '15m', labelKey: 'usage.range_15m', fallback: '15 分钟' },
@@ -56,6 +59,15 @@ const getErrorMessage = (error: unknown) =>
 const formatPercent = (value: number) =>
   `${Number.isFinite(value) ? value.toFixed(value >= 99.5 || value <= 0 ? 0 : 1) : '0'}%`;
 
+const formatRate = (requests: number, range: UsageTimeRange) => {
+  if (!requests) return '0/min';
+  const minutes =
+    range === '15m' ? 15 : range === '1h' ? 60 : range === '6h' ? 360 : range === '24h' ? 1440 : 0;
+  if (!minutes) return `${formatCompactNumber(requests)}/total`;
+  const rate = requests / minutes;
+  return `${rate >= 10 ? rate.toFixed(0) : rate.toFixed(1)}/min`;
+};
+
 const formatTime = (timestampMs: number, locale: string) => {
   if (!timestampMs) return '-';
   return new Date(timestampMs).toLocaleString(locale, {
@@ -67,17 +79,22 @@ const formatTime = (timestampMs: number, locale: string) => {
   });
 };
 
+const getStatusLabel = (event: UsageEvent) =>
+  event.failed ? `HTTP ${event.failStatusCode || 500}` : 'OK';
+
 function MetricTile({
   label,
   value,
   detail,
   icon,
+  meta,
   tone = 'neutral',
 }: {
   label: string;
   value: string;
   detail?: string;
   icon: React.ReactNode;
+  meta?: string;
   tone?: 'neutral' | 'success' | 'warning' | 'danger';
 }) {
   const toneClass = tone === 'neutral' ? '' : styles[`tone${tone}`];
@@ -89,6 +106,7 @@ function MetricTile({
         <strong className={styles.metricValue}>{value}</strong>
         {detail && <span className={styles.metricDetail}>{detail}</span>}
       </div>
+      {meta && <span className={styles.metricMeta}>{meta}</span>}
     </div>
   );
 }
@@ -101,12 +119,22 @@ function TokenLineChart({ data }: { data: TokenSeriesPoint[] }) {
   const plotHeight = height - padding.top - padding.bottom;
   const maxTokens = Math.max(...data.map((point) => point.totalTokens), 1);
   const xStep = data.length > 1 ? plotWidth / (data.length - 1) : plotWidth;
+  const getPointValue = (point: TokenSeriesPoint, key: keyof TokenSeriesPoint) =>
+    typeof point[key] === 'number' ? point[key] : 0;
   const points = data.map((point, index) => {
     const x = padding.left + index * xStep;
     const y = padding.top + plotHeight - (point.totalTokens / maxTokens) * plotHeight;
     return { ...point, x, y };
   });
   const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x},${point.y}`).join(' ');
+  const seriesPath = (key: 'inputTokens' | 'outputTokens' | 'reasoningTokens') =>
+    points
+      .map((point, index) => {
+        const value = getPointValue(point, key);
+        const y = padding.top + plotHeight - (value / maxTokens) * plotHeight;
+        return `${index === 0 ? 'M' : 'L'}${point.x},${y}`;
+      })
+      .join(' ');
   const areaPath =
     points.length > 0
       ? `${linePath} L${points[points.length - 1].x},${padding.top + plotHeight} L${points[0].x},${padding.top + plotHeight} Z`
@@ -136,6 +164,9 @@ function TokenLineChart({ data }: { data: TokenSeriesPoint[] }) {
         );
       })}
       {areaPath && <path d={areaPath} className={styles.chartArea} />}
+      <path d={seriesPath('inputTokens')} className={`${styles.chartLineThin} ${styles.chartLineInput}`} />
+      <path d={seriesPath('outputTokens')} className={`${styles.chartLineThin} ${styles.chartLineOutput}`} />
+      <path d={seriesPath('reasoningTokens')} className={`${styles.chartLineThin} ${styles.chartLineReasoning}`} />
       {linePath && <path d={linePath} className={styles.chartLine} />}
       {points.map((point) =>
         point.requests > 0 ? (
@@ -161,16 +192,79 @@ function TokenLineChart({ data }: { data: TokenSeriesPoint[] }) {
   );
 }
 
+function ChartEmptySkeleton({ title, description }: { title: string; description: string }) {
+  return (
+    <div className={styles.chartEmpty}>
+      <div className={styles.chartEmptyGrid} aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className={styles.chartEmptyContent}>
+        <IconChartLine size={22} />
+        <strong>{title}</strong>
+        <span>{description}</span>
+      </div>
+    </div>
+  );
+}
+
+function DataChip({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label: string;
+  value: string;
+  tone?: 'neutral' | 'success' | 'warning' | 'danger';
+}) {
+  return (
+    <div className={`${styles.dataChip} ${styles[`chip${tone}`]}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function TokenBreakdownCard({
+  label,
+  value,
+  total,
+  tone,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  tone: 'input' | 'output' | 'reasoning' | 'cache';
+}) {
+  const percent = total > 0 ? Math.min(100, (value / total) * 100) : 0;
+  return (
+    <div className={styles.tokenBreakdownCard}>
+      <div className={styles.tokenBreakdownTop}>
+        <span className={`${styles.tokenDot} ${styles[`tokenDot${tone}`]}`} />
+        <span>{label}</span>
+      </div>
+      <strong>{formatCompactNumber(value)}</strong>
+      <div className={styles.tokenBreakdownTrack} aria-hidden="true">
+        <span className={styles[`tokenFill${tone}`]} style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function RankingList({
   title,
   groups,
   metric,
   emptyText,
+  caption,
 }: {
   title: string;
   groups: UsageGroup[];
   metric: 'latency' | 'tokens' | 'requests';
   emptyText: string;
+  caption?: string;
 }) {
   const maxValue = Math.max(
     ...groups.map((group) =>
@@ -186,7 +280,10 @@ function RankingList({
   return (
     <section className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2>{title}</h2>
+        <div>
+          <h2>{title}</h2>
+          {caption && <span>{caption}</span>}
+        </div>
       </div>
       {groups.length === 0 ? (
         <div className={styles.mutedState}>{emptyText}</div>
@@ -230,6 +327,110 @@ function RankingList({
         </div>
       )}
     </section>
+  );
+}
+
+function DistributionPanel({
+  title,
+  caption,
+  groups,
+  emptyText,
+}: {
+  title: string;
+  caption: string;
+  groups: UsageGroup[];
+  emptyText: string;
+}) {
+  const total = groups.reduce((sum, group) => sum + group.requests, 0);
+  return (
+    <section className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <div>
+          <h2>{title}</h2>
+          <span>{caption}</span>
+        </div>
+      </div>
+      {groups.length === 0 ? (
+        <div className={styles.mutedState}>{emptyText}</div>
+      ) : (
+        <div className={styles.distributionList}>
+          {groups.map((group, index) => {
+            const percent = total > 0 ? (group.requests / total) * 100 : 0;
+            return (
+              <div className={styles.distributionRow} key={group.key}>
+                <div className={styles.distributionMeta}>
+                  <span className={`${styles.distributionSwatch} ${styles[`swatch${index % 6}`]}`} />
+                  <span title={group.label}>{group.label}</span>
+                </div>
+                <div className={styles.distributionMeasure}>
+                  <strong>{formatCompactNumber(group.requests)}</strong>
+                  <span>{formatPercent(percent)}</span>
+                </div>
+                <div className={styles.distributionTrack} aria-hidden="true">
+                  <span style={{ width: `${Math.max(3, percent)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RecentRequestsTable({
+  events,
+  locale,
+  emptyText,
+}: {
+  events: UsageEvent[];
+  locale: string;
+  emptyText: string;
+}) {
+  if (events.length === 0) {
+    return <div className={styles.mutedState}>{emptyText}</div>;
+  }
+
+  return (
+    <div className={styles.compactTableWrap}>
+      <table className={styles.compactTable}>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Status</th>
+            <th>Provider / Model</th>
+            <th>Endpoint</th>
+            <th>Tokens</th>
+            <th>Latency</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((event) => (
+            <tr key={event.id}>
+              <td>{formatTime(event.timestampMs, locale)}</td>
+              <td>
+                <span className={`${styles.eventStatus} ${event.failed ? styles.eventFailed : styles.eventOk}`}>
+                  {getStatusLabel(event)}
+                </span>
+              </td>
+              <td>
+                <div className={styles.tableMainCell}>
+                  <strong>{event.provider}</strong>
+                  <span>{event.alias || event.model}</span>
+                </div>
+              </td>
+              <td>
+                <span className={styles.requestId} title={event.endpoint}>
+                  {event.endpoint}
+                </span>
+              </td>
+              <td>{formatCompactNumber(event.tokens.totalTokens)}</td>
+              <td>{formatDuration(event.latencyMs)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -323,8 +524,27 @@ export function UsageAnalyticsPage() {
     () => groupUsageEvents(filteredEvents, (event) => event.provider, 8),
     [filteredEvents]
   );
+  const endpointDistribution = useMemo(
+    () => groupUsageEvents(filteredEvents, (event) => event.endpoint, 8),
+    [filteredEvents]
+  );
+  const executorDistribution = useMemo(
+    () => groupUsageEvents(filteredEvents, (event) => event.executorType, 6),
+    [filteredEvents]
+  );
+  const authDistribution = useMemo(
+    () => groupUsageEvents(filteredEvents, (event) => event.authType, 6),
+    [filteredEvents]
+  );
   const failedEvents = useMemo(() => getFailedUsageEvents(filteredEvents), [filteredEvents]);
+  const recentEvents = useMemo(
+    () => [...filteredEvents].sort((a, b) => b.timestampMs - a.timestampMs).slice(0, RECENT_REQUEST_LIMIT),
+    [filteredEvents]
+  );
   const disableControls = connectionStatus !== 'connected';
+  const busiestModel = modelDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
+  const slowestRoute = latencyRanking[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
+  const failureTone = summary.failures > 0 ? 'warning' : 'success';
 
   const clearEvents = () => {
     showConfirmation({
@@ -360,65 +580,123 @@ export function UsageAnalyticsPage() {
 
   return (
     <div className={styles.usagePage}>
-      <header className={styles.header}>
-        <div>
-          <div className={styles.breadcrumb}>
-            {t('nav.dashboard')} / {t('nav.usage_statistics', { defaultValue: '用量统计' })}
+      <section className={styles.pageInset}>
+        <header className={styles.header}>
+          <div>
+            <div className={styles.breadcrumb}>
+              <span>{t('nav.dashboard')}</span>
+              <span>/</span>
+              <span>{t('nav.usage_statistics', { defaultValue: '用量统计' })}</span>
+            </div>
+            <h1>{t('usage.title', { defaultValue: '用量统计' })}</h1>
+            <div className={styles.headerMeta}>
+              <DataChip
+                label={t('usage.capture_status', { defaultValue: '采集状态' })}
+                value={
+                  usageDisabled
+                    ? t('usage.capture_disabled', { defaultValue: '未启用' })
+                    : t('usage.capture_ready', { defaultValue: '已就绪' })
+                }
+                tone={usageDisabled ? 'warning' : 'success'}
+              />
+              <DataChip
+                label={t('usage.cached_events', { defaultValue: '本地事件' })}
+                value={formatCompactNumber(events.length)}
+              />
+              <DataChip
+                label={t('usage.request_rate', { defaultValue: '请求速率' })}
+                value={formatRate(summary.requests, range)}
+              />
+            </div>
           </div>
-          <h1>{t('usage.title', { defaultValue: '用量统计' })}</h1>
-        </div>
-        <div className={styles.headerActions}>
-          <ToggleSwitch
-            checked={autoRefresh}
-            onChange={setAutoRefresh}
-            disabled={disableControls}
-            label={
-              <span className={styles.switchLabel}>
-                <IconTimer size={16} />
-                {t('usage.auto_refresh', { defaultValue: '自动刷新' })}
+          <div className={styles.headerActions}>
+            <ToggleSwitch
+              checked={autoRefresh}
+              onChange={setAutoRefresh}
+              disabled={disableControls}
+              label={
+                <span className={styles.switchLabel}>
+                  <IconTimer size={16} />
+                  {t('usage.auto_refresh', { defaultValue: '自动刷新' })}
+                </span>
+              }
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => loadUsageQueue()}
+              loading={loading}
+              disabled={disableControls}
+            >
+              <span className={styles.buttonContent}>
+                <IconRefreshCw size={16} />
+                {t('common.refresh')}
               </span>
-            }
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => loadUsageQueue()}
-            loading={loading}
-            disabled={disableControls}
-          >
-            <span className={styles.buttonContent}>
-              <IconRefreshCw size={16} />
-              {t('common.refresh')}
-            </span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={clearEvents}
-            disabled={events.length === 0}
-            title={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
-            aria-label={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
-          >
-            <IconTrash2 size={16} />
-          </Button>
-        </div>
-      </header>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearEvents}
+              disabled={events.length === 0}
+              title={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
+              aria-label={t('usage.clear_title', { defaultValue: '清空统计缓存' })}
+            >
+              <IconTrash2 size={16} />
+            </Button>
+          </div>
+        </header>
 
-      <div className={styles.rangeBar} role="tablist" aria-label={t('usage.range_label', { defaultValue: '时间范围' })}>
-        {timeRangeOptions.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={`${styles.rangeButton} ${range === option.value ? styles.rangeButtonActive : ''}`}
-            onClick={() => setRange(option.value)}
-            aria-pressed={range === option.value}
-          >
-            {t(option.labelKey, { defaultValue: option.fallback })}
-          </button>
-        ))}
-      </div>
+        <div className={styles.secondaryBar}>
+          <nav className={styles.secondaryNav} aria-label={t('usage.sections', { defaultValue: '统计分区' })}>
+            <a href="#usage-overview">{t('usage.section_overview', { defaultValue: '总览' })}</a>
+            <a href="#usage-token">{t('usage.section_tokens', { defaultValue: 'Token' })}</a>
+            <a href="#usage-distribution">{t('usage.section_distribution', { defaultValue: '分布' })}</a>
+            <a href="#usage-failures">{t('usage.section_failures', { defaultValue: '失败' })}</a>
+          </nav>
+          <div className={styles.rangeBar} role="tablist" aria-label={t('usage.range_label', { defaultValue: '时间范围' })}>
+            {timeRangeOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`${styles.rangeButton} ${range === option.value ? styles.rangeButtonActive : ''}`}
+                onClick={() => setRange(option.value)}
+                aria-pressed={range === option.value}
+              >
+                {t(option.labelKey, { defaultValue: option.fallback })}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className={styles.statusGrid}>
+          <div className={styles.statusCard}>
+            <IconNetwork size={18} />
+            <span>{t('usage.connection', { defaultValue: '连接' })}</span>
+            <strong>{t(`common.${connectionStatus}`, { defaultValue: connectionStatus })}</strong>
+          </div>
+          <div className={styles.statusCard}>
+            <IconSlidersHorizontal size={18} />
+            <span>{t('usage.queue_sample', { defaultValue: '队列采样' })}</span>
+            <strong>{USAGE_QUEUE_COUNT}</strong>
+          </div>
+          <div className={styles.statusCard}>
+            <IconInfo size={18} />
+            <span>{t('usage.last_loaded_label', { defaultValue: '最后刷新' })}</span>
+            <strong>
+              {lastLoadedAt
+                ? formatTime(lastLoadedAt, i18n.language)
+                : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
+            </strong>
+          </div>
+          <div className={styles.statusCard}>
+            <IconChartLine size={18} />
+            <span>{t('usage.top_model', { defaultValue: '高频模型' })}</span>
+            <strong title={busiestModel}>{busiestModel}</strong>
+          </div>
+        </div>
+      </section>
 
       <div className={styles.analyticsShell}>
         <aside className={styles.insightRail}>
@@ -443,6 +721,17 @@ export function UsageAnalyticsPage() {
             </span>
           </div>
           <div className={styles.railBlock}>
+            <span className={styles.railLabel}>{t('usage.slowest_route', { defaultValue: '最慢路由' })}</span>
+            <strong className={styles.railValueSmall} title={slowestRoute}>
+              {slowestRoute}
+            </strong>
+            <span className={styles.railHint}>
+              {latencyRanking[0]
+                ? formatDuration(latencyRanking[0].avgLatencyMs)
+                : t('usage.empty_short', { defaultValue: '暂无数据' })}
+            </span>
+          </div>
+          <div className={styles.railBlock}>
             <span className={styles.railLabel}>{t('usage.providers', { defaultValue: 'Provider' })}</span>
             <div className={styles.providerStack}>
               {providerDistribution.length === 0 ? (
@@ -457,16 +746,32 @@ export function UsageAnalyticsPage() {
               )}
             </div>
           </div>
+          <div className={styles.railBlock}>
+            <span className={styles.railLabel}>{t('usage.auth_type', { defaultValue: '认证类型' })}</span>
+            <div className={styles.providerStack}>
+              {authDistribution.length === 0 ? (
+                <span className={styles.railHint}>{t('usage.empty_short', { defaultValue: '暂无数据' })}</span>
+              ) : (
+                authDistribution.map((auth) => (
+                  <div key={auth.key} className={styles.providerRow}>
+                    <span>{auth.label}</span>
+                    <strong>{formatCompactNumber(auth.requests)}</strong>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </aside>
 
         <main className={styles.contentPanel}>
           {error && <div className={styles.errorBanner}>{error}</div>}
 
-          <section className={styles.metricsGrid}>
+          <section className={styles.metricsGrid} id="usage-overview">
             <MetricTile
               label={t('usage.total_requests', { defaultValue: '请求数' })}
               value={formatCompactNumber(summary.requests)}
               detail={`${formatCompactNumber(summary.successes)} ${t('common.success')} · ${formatCompactNumber(summary.failures)} ${t('common.failure')}`}
+              meta={formatRate(summary.requests, range)}
               icon={<IconTrendingUp size={20} />}
               tone="neutral"
             />
@@ -477,13 +782,18 @@ export function UsageAnalyticsPage() {
                 defaultValue: '{{count}} 次失败',
                 count: formatCompactNumber(summary.failures),
               })}
+              meta={formatPercent(100 - summary.successRate)}
               icon={<IconCheckCircle2 size={20} />}
-              tone={summary.failures > 0 ? 'warning' : 'success'}
+              tone={failureTone}
             />
             <MetricTile
               label={t('usage.total_tokens', { defaultValue: 'Token 总量' })}
               value={formatCompactNumber(summary.tokens.totalTokens)}
               detail={`I ${formatCompactNumber(summary.tokens.inputTokens)} · O ${formatCompactNumber(summary.tokens.outputTokens)} · R ${formatCompactNumber(summary.tokens.reasoningTokens)}`}
+              meta={t('usage.cached_tokens_short', {
+                defaultValue: 'Cache {{count}}',
+                count: formatCompactNumber(summary.tokens.cachedTokens + summary.tokens.cacheReadTokens),
+              })}
               icon={<IconChartLine size={20} />}
               tone="success"
             />
@@ -491,20 +801,31 @@ export function UsageAnalyticsPage() {
               label={t('usage.avg_latency', { defaultValue: '平均延迟' })}
               value={formatDuration(summary.avgLatencyMs)}
               detail={`TTFT ${formatDuration(summary.avgTtftMs)}`}
+              meta={
+                latencyRanking[0]
+                  ? formatDuration(latencyRanking[0].maxLatencyMs)
+                  : t('usage.empty_short', { defaultValue: '暂无数据' })
+              }
               icon={<IconTimer size={20} />}
               tone="neutral"
             />
           </section>
 
-          <section className={`${styles.panel} ${styles.chartPanel}`}>
+          <section className={`${styles.panel} ${styles.chartPanel}`} id="usage-token">
             <div className={styles.panelHeader}>
               <div>
                 <h2>{t('usage.token_curve', { defaultValue: 'Token 曲线' })}</h2>
                 <span>{t('usage.token_curve_subtitle', { defaultValue: 'Input / Output / Reasoning 聚合' })}</span>
               </div>
+              <div className={styles.chartLegend} aria-hidden="true">
+                <span><i className={styles.legendTotal} />Total</span>
+                <span><i className={styles.legendInput} />Input</span>
+                <span><i className={styles.legendOutput} />Output</span>
+                <span><i className={styles.legendReasoning} />Reasoning</span>
+              </div>
             </div>
             {tokenSeries.length === 0 || summary.requests === 0 ? (
-              <EmptyState
+              <ChartEmptySkeleton
                 title={t('usage.empty_title', { defaultValue: '暂无统计数据' })}
                 description={t('usage.empty_desc', {
                   defaultValue: '产生新的模型请求后，这里会显示实时用量。',
@@ -513,19 +834,67 @@ export function UsageAnalyticsPage() {
             ) : (
               <TokenLineChart data={tokenSeries} />
             )}
+            <div className={styles.tokenBreakdownGrid}>
+              <TokenBreakdownCard
+                label={t('usage.input_tokens', { defaultValue: 'Input' })}
+                value={summary.tokens.inputTokens}
+                total={summary.tokens.totalTokens}
+                tone="input"
+              />
+              <TokenBreakdownCard
+                label={t('usage.output_tokens', { defaultValue: 'Output' })}
+                value={summary.tokens.outputTokens}
+                total={summary.tokens.totalTokens}
+                tone="output"
+              />
+              <TokenBreakdownCard
+                label={t('usage.reasoning_tokens', { defaultValue: 'Reasoning' })}
+                value={summary.tokens.reasoningTokens}
+                total={summary.tokens.totalTokens}
+                tone="reasoning"
+              />
+              <TokenBreakdownCard
+                label={t('usage.cache_tokens', { defaultValue: 'Cache' })}
+                value={summary.tokens.cachedTokens + summary.tokens.cacheReadTokens + summary.tokens.cacheCreationTokens}
+                total={summary.tokens.totalTokens}
+                tone="cache"
+              />
+            </div>
           </section>
 
-          <div className={styles.twoColumnGrid}>
-            <RankingList
+          <div className={styles.twoColumnGrid} id="usage-distribution">
+            <DistributionPanel
               title={t('usage.model_distribution', { defaultValue: '模型调用分布' })}
+              caption={t('usage.model_distribution_caption', { defaultValue: '按请求量排序' })}
               groups={modelDistribution}
-              metric="tokens"
               emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
             />
             <RankingList
               title={t('usage.latency_ranking', { defaultValue: '延迟排行' })}
+              caption={t('usage.latency_ranking_caption', { defaultValue: '按平均延迟排序' })}
               groups={latencyRanking}
               metric="latency"
+              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+            />
+          </div>
+
+          <div className={styles.threeColumnGrid}>
+            <DistributionPanel
+              title={t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}
+              caption={t('usage.endpoint_distribution_caption', { defaultValue: '按接口路径聚合' })}
+              groups={endpointDistribution}
+              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+            />
+            <DistributionPanel
+              title={t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}
+              caption={t('usage.provider_distribution_caption', { defaultValue: '按上游提供商聚合' })}
+              groups={providerDistribution}
+              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+            />
+            <DistributionPanel
+              title={t('usage.executor_distribution', { defaultValue: 'Executor 分布' })}
+              caption={t('usage.executor_distribution_caption', { defaultValue: '按执行器类型聚合' })}
+              groups={executorDistribution}
               emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
             />
           </div>
@@ -533,9 +902,28 @@ export function UsageAnalyticsPage() {
           <section className={styles.panel}>
             <div className={styles.panelHeader}>
               <div>
+                <h2>{t('usage.recent_requests', { defaultValue: '最近请求' })}</h2>
+                <span>{t('usage.recent_requests_caption', { defaultValue: '最近 {{count}} 条事件', count: RECENT_REQUEST_LIMIT })}</span>
+              </div>
+            </div>
+            <RecentRequestsTable
+              events={recentEvents}
+              locale={i18n.language}
+              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+            />
+          </section>
+
+          <section className={styles.panel} id="usage-failures">
+            <div className={styles.panelHeader}>
+              <div>
                 <h2>{t('usage.failure_tracking', { defaultValue: '失败请求追踪' })}</h2>
                 <span>{t('usage.failure_tracking_subtitle', { defaultValue: '按最近失败时间排序' })}</span>
               </div>
+              <DataChip
+                label={t('usage.failure_count_label', { defaultValue: '失败数' })}
+                value={formatCompactNumber(failedEvents.length)}
+                tone={failedEvents.length > 0 ? 'warning' : 'success'}
+              />
             </div>
             {failedEvents.length === 0 ? (
               <div className={styles.cleanState}>
