@@ -316,10 +316,6 @@ export function VisualConfigEditor({
     [countErrors, hasPayloadValidationErrors, t]
   );
 
-  const hasValidationIssues =
-    sections.some((section) => section.errorCount > 0) || hasPayloadValidationErrors;
-  const activeSection = sections.find((section) => section.id === activeSectionId) ?? sections[0];
-
   useEffect(() => {
     if (!isCurrentLayer) return undefined;
     if (typeof IntersectionObserver === 'undefined') return undefined;
@@ -372,8 +368,8 @@ export function VisualConfigEditor({
     setActiveSectionId(sectionId);
     sectionRefs.current[sectionId]?.scrollIntoView({
       behavior: 'smooth',
-      block: 'nearest',
-      inline: 'start',
+      block: 'start',
+      inline: 'nearest',
     });
   }, []);
 
@@ -415,22 +411,6 @@ export function VisualConfigEditor({
 
   return (
     <div className={styles.visualEditor}>
-      <div className={styles.overview}>
-        <div className={styles.overviewHeader}>
-          <div className={styles.overviewMeta}>
-            <span className={styles.overviewPill}>
-              {t('config_management.visual.quick_jump', { defaultValue: '快速跳转' })}
-            </span>
-            <span className={styles.overviewPill}>{activeSection?.title}</span>
-            {hasValidationIssues ? (
-              <span className={`${styles.overviewPill} ${styles.overviewPillWarning}`}>
-                {t('config_management.visual.validation.validation_blocked')}
-              </span>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
       <div className={styles.workspace}>
         {isMobile ? (
           <div className={styles.mobileSectionNav}>

@@ -4,8 +4,10 @@ import { createPortal } from 'react-dom';
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { parse as parseYaml, parseDocument } from 'yaml';
 import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
-import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Badge } from '@/components/shadcn/ui/badge';
+import { Button } from '@/components/shadcn/ui/button';
+import { Tabs, TabsList, TabsTrigger } from '@/components/shadcn/ui/tabs';
 import {
   IconCheck,
   IconChevronDown,
@@ -439,13 +441,6 @@ export function ConfigPage() {
     return t('config_management.status_loaded');
   };
 
-  const getStatusClass = () => {
-    if (error || hasVisualModeError || hasVisualValidationErrors) return styles.error;
-    if (isDirty) return styles.modified;
-    if (!loading && !saving) return styles.saved;
-    return '';
-  };
-
   const getFloatingStatusText = () => {
     if (!isMobile) return getStatusText();
     if (disableControls)
@@ -460,6 +455,15 @@ export function ConfigPage() {
     if (isDirty) return t('config_management.status_dirty_short', { defaultValue: 'Unsaved' });
     return t('config_management.status_loaded_short', { defaultValue: 'Loaded' });
   };
+
+  const statusBadgeVariant =
+    error || hasVisualModeError || hasVisualValidationErrors
+      ? 'warning'
+      : isDirty
+        ? 'warning'
+        : !loading && !saving
+          ? 'success'
+          : 'outline';
 
   const handleReload = useCallback(() => {
     if (!isDirty) {
@@ -482,15 +486,18 @@ export function ConfigPage() {
   const floatingActions = (
     <div className={styles.floatingActionContainer} ref={floatingActionsRef}>
       <div className={styles.floatingActionList}>
-        <div
+        <Badge
+          variant={statusBadgeVariant}
           className={`${styles.floatingStatus} ${
             isMobile ? styles.floatingStatusCompact : ''
-          } ${getStatusClass()}`}
+          }`}
         >
           {getFloatingStatusText()}
-        </div>
-        <button
+        </Badge>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           className={styles.floatingActionButton}
           onClick={handleReload}
           disabled={loading || saving}
@@ -498,9 +505,11 @@ export function ConfigPage() {
           aria-label={t('config_management.reload')}
         >
           <IconRefreshCw size={16} />
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           className={styles.floatingActionButton}
           onClick={handleSave}
           disabled={
@@ -517,7 +526,7 @@ export function ConfigPage() {
         >
           <IconCheck size={16} />
           {isDirty && <span className={styles.dirtyDot} aria-hidden="true" />}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -527,28 +536,27 @@ export function ConfigPage() {
       <div className={styles.pageHeader}>
         <div className={styles.pageHeaderCopy}>
           <h1 className={styles.pageTitle}>{t('config_management.title')}</h1>
-          <div className={styles.tabBar}>
-            <button
-              type="button"
-              className={`${styles.tabItem} ${activeTab === 'visual' ? styles.tabActive : ''}`}
-              onClick={() => handleTabChange('visual')}
-              disabled={saving || loading}
-            >
-              {t('config_management.tabs.visual', { defaultValue: '可视化编辑' })}
-            </button>
-            <button
-              type="button"
-              className={`${styles.tabItem} ${activeTab === 'source' ? styles.tabActive : ''}`}
-              onClick={() => handleTabChange('source')}
-              disabled={saving || loading}
-            >
-              {t('config_management.tabs.source', { defaultValue: '源代码编辑' })}
-            </button>
-          </div>
         </div>
+        <Badge variant={statusBadgeVariant} className={styles.pageStatus}>
+          {getStatusText()}
+        </Badge>
       </div>
 
       <div className={styles.workspaceShell}>
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => handleTabChange(value as ConfigEditorTab)}
+          className={styles.tabBar}
+        >
+          <TabsList className={styles.tabList}>
+            <TabsTrigger value="visual" className={styles.tabTrigger} disabled={saving || loading}>
+              {t('config_management.tabs.visual', { defaultValue: '可视化编辑' })}
+            </TabsTrigger>
+            <TabsTrigger value="source" className={styles.tabTrigger} disabled={saving || loading}>
+              {t('config_management.tabs.source', { defaultValue: '源代码编辑' })}
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
         <div className={styles.content}>
           {error && <div className="error-box">{error}</div>}
           {!error && visualParseError && (
@@ -605,8 +613,9 @@ export function ConfigPage() {
 
                 <div className={styles.searchActions}>
                   <Button
-                    variant="secondary"
-                    size="sm"
+                    variant="outline"
+                    size="icon"
+                    className={styles.searchActionButton}
                     onClick={handlePrevMatch}
                     disabled={
                       !searchQuery || lastSearchedQuery !== searchQuery || searchResults.total === 0
@@ -616,8 +625,9 @@ export function ConfigPage() {
                     <IconChevronUp size={16} />
                   </Button>
                   <Button
-                    variant="secondary"
-                    size="sm"
+                    variant="outline"
+                    size="icon"
+                    className={styles.searchActionButton}
                     onClick={handleNextMatch}
                     disabled={
                       !searchQuery || lastSearchedQuery !== searchQuery || searchResults.total === 0

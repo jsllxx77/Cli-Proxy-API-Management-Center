@@ -2,11 +2,11 @@
 @use '../styles/variables' as *;
 
 .container {
-  width: min(100%, 1480px);
+  width: 100%;
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: clamp(18px, 2.4vw, 28px);
+  gap: 16px;
   margin: 0 auto;
   overflow-y: auto;
   padding-bottom: calc(
@@ -16,71 +16,67 @@
 
 .pageHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 0 2px;
+
+  @include mobile {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .pageHeaderCopy {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
   min-width: 0;
-  width: min(100%, 360px);
 }
 
 .pageTitle {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--text-primary);
   margin: 0;
+  line-height: 1.2;
 }
 
 .tabBar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  width: fit-content;
+  max-width: 100%;
 }
 
-.tabItem {
-  @include button-reset;
-  min-height: 38px;
-  padding: 0 12px;
+.tabList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(132px, 1fr));
+  width: min(100vw - 32px, 360px);
+  height: 40px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.tabTrigger {
+  height: 30px;
   border-radius: 6px;
-  border: 1px solid transparent;
-  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 650;
-  line-height: 1.25;
-  white-space: nowrap;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease,
-    border-color 0.15s ease;
-
-  &:hover:not(:disabled) {
-    color: var(--text-primary);
-    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
-  }
-
-  &:disabled {
-    opacity: 0.58;
-    cursor: not-allowed;
-  }
 }
 
-.tabActive {
-  color: var(--bg-primary);
-  background: var(--text-primary);
-  border-color: var(--text-primary);
+.pageStatus {
+  min-height: 28px;
+  white-space: nowrap;
+
+  @include mobile {
+    max-width: 100%;
+  }
 }
 
 .workspaceShell {
   display: flex;
   flex-direction: column;
-  gap: $spacing-lg;
+  gap: 14px;
   min-width: 0;
 }
 
@@ -96,6 +92,11 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  padding: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow);
 }
 
 .sourceToolbar {
@@ -185,11 +186,7 @@
   flex-shrink: 0;
 
   button {
-    min-width: 38px;
-    width: 38px;
-    height: 38px;
-    padding: 0 !important;
-    border-radius: 6px;
+    flex: 0 0 auto;
   }
 
   @include mobile {
@@ -200,6 +197,11 @@
       width: auto;
     }
   }
+}
+
+.searchActionButton {
+  width: 38px;
+  height: 38px;
 }
 
 .editorWrapper {
@@ -263,24 +265,6 @@
   }
 }
 
-.modified {
-  color: var(--warning-text);
-  background: var(--warning-bg);
-  border-color: var(--warning-border);
-}
-
-.saved {
-  color: var(--success-color);
-  background: color-mix(in srgb, var(--success-color) 10%, transparent);
-  border-color: color-mix(in srgb, var(--success-color) 34%, var(--border-color));
-}
-
-.error {
-  color: var(--warning-text);
-  background: var(--warning-bg);
-  border-color: var(--warning-border);
-}
-
 .floatingActionContainer {
   position: fixed;
   left: var(--content-center-x, 50%);
@@ -300,9 +284,10 @@
   max-width: inherit;
   overflow-x: auto;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-primary) 96%, transparent);
   box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(12px);
   scrollbar-width: none;
 
   &::-webkit-scrollbar {
@@ -311,14 +296,8 @@
 }
 
 .floatingStatus {
-  display: inline-flex;
-  align-items: center;
   min-width: 0;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  color: var(--text-primary);
+  min-height: 32px;
   font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
@@ -336,30 +315,10 @@
 }
 
 .floatingActionButton {
-  @include button-reset;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   border-radius: 6px;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition:
-    background-color 0.15s ease,
-    color 0.15s ease,
-    opacity 0.15s ease;
-
-  &:hover:not(:disabled) {
-    background: var(--text-primary);
-    color: var(--bg-primary);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
 }
 
 .dirtyDot {
