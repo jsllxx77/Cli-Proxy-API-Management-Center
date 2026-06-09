@@ -33,12 +33,17 @@ import {
 } from '@/components/shadcn/ui/table';
 import { apiKeysApi, authFilesApi, providersApi, usageApi } from '@/services/api';
 import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
 import {
   buildTokenSeries,
   filterUsageEventsByRange,
   formatCompactNumber,
+  getUsageStorageKey,
+  loadStoredUsageEvents,
+  mergeUsageEvents,
   normalizeUsageEvents,
+  saveStoredUsageEvents,
   summarizeUsageEvents,
   type TokenSeriesPoint,
   type UsageEvent,
@@ -64,11 +69,14 @@ interface ProviderStats {
 
 const providerColors = ['#111111', '#737373', '#a3a3a3', '#d4d4d4'];
 const tokenTrendRanges: Array<{ value: UsageTimeRange; label: string }> = [
-  { value: '15m', label: '15 分钟' },
   { value: '1h', label: '1 小时' },
   { value: '6h', label: '6 小时' },
   { value: '24h', label: '24 小时' },
+  { value: 'all', label: '全部' },
 ];
+
+const dashboardAxisLabelClass =
+  'pointer-events-none absolute text-[9px] font-normal leading-none text-muted-foreground/55 tabular-nums';
 
 const trimTrailingEmptyTokenBuckets = (series: TokenSeriesPoint[]) => {
   let end = series.length;
@@ -152,7 +160,7 @@ function TokenTrendChart({
   const maxValue = Math.max(...data.map((point) => point.totalTokens), 1);
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
     y: bottom - ratio * plotHeight,
-    label: formatCompactNumber(maxValue * ratio),
+    label: hasData ? formatCompactNumber(maxValue * ratio) : ratio === 0 ? '0' : `${ratio * 100}%`,
   }));
   const pointFor = (value: number, index: number, length: number) => {
     const x = padding.left + (plotWidth * index) / Math.max(1, length - 1);
@@ -168,7 +176,9 @@ function TokenTrendChart({
   const areaPoints = data.length
     ? `${padding.left},${bottom} ${totalPoints} ${padding.left + plotWidth},${bottom}`
     : '';
-  const xLabels = data.filter((_, index) => index === 0 || index === Math.floor(data.length / 2) || index === data.length - 1);
+  const xLabelIndexes = data.length
+    ? Array.from(new Set([0, Math.floor((data.length - 1) / 2), data.length - 1]))
+    : [];
 
   return (
     <div className="relative h-[360px] w-full overflow-hidden rounded-lg border bg-background">
@@ -187,9 +197,6 @@ function TokenTrendChart({
         </defs>
         {yTicks.map((tick) => (
           <g key={tick.y}>
-            <text x={padding.left - 14} y={tick.y + 4} textAnchor="end" className="fill-muted-foreground text-[12px]">
-              {tick.label}
-            </text>
             <line
               x1={padding.left}
               x2={padding.left + plotWidth}
@@ -210,16 +217,42 @@ function TokenTrendChart({
             <polyline points={reasoningPoints} fill="none" stroke="#8b5cf6" strokeWidth="1.6" strokeLinejoin="round" />
           </>
         )}
-        {xLabels.map((point) => {
-          const index = data.indexOf(point);
-          const x = padding.left + (plotWidth * index) / Math.max(1, data.length - 1);
-          return (
-            <text key={`${point.timestampMs}-${index}`} x={x} y={bottom + 28} textAnchor="middle" className="fill-muted-foreground text-[12px]">
-              {point.label}
-            </text>
-          );
-        })}
       </svg>
+      {yTicks.map((tick) => (
+        <span
+          key={tick.label}
+          className={dashboardAxisLabelClass}
+          style={{
+            left: `${((padding.left - 12) / width) * 100}%`,
+            top: `${(tick.y / height) * 100}%`,
+            transform: 'translate(-100%, -50%)',
+          }}
+        >
+          {tick.label}
+        </span>
+      ))}
+      {xLabelIndexes.map((index) => {
+        const point = data[index];
+        const x = padding.left + (plotWidth * index) / Math.max(1, data.length - 1);
+        return (
+          <span
+            key={`${point.timestampMs}-${index}`}
+            className={dashboardAxisLabelClass}
+            style={{
+              left: `${(x / width) * 100}%`,
+              bottom: '8px',
+              transform:
+                index === 0
+                  ? 'translateX(0)'
+                  : index === data.length - 1
+                    ? 'translateX(-100%)'
+                    : 'translateX(-50%)',
+            }}
+          >
+            {point.label}
+          </span>
+        );
+      })}
       {!hasData && (
         <div className="absolute inset-0 grid place-items-center px-6 text-center">
           <div className="rounded-md border bg-card/95 px-5 py-4 text-sm shadow-sm">
@@ -304,10 +337,11 @@ export function DashboardPage() {
     openai: null,
   });
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
-  const [tokenRange, setTokenRange] = useState<UsageTimeRange>('1h');
+  const [tokenRange, setTokenRange] = useLocalStorage<UsageTimeRange>('usageAnalytics.range', '1h');
   const [usageLoading, setUsageLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const apiKeysCache = useRef<string[]>([]);
+  const usageStorageKey = useMemo(() => getUsageStorageKey(apiBase), [apiBase]);
 
   useEffect(() => {
     apiKeysCache.current = [];
@@ -387,10 +421,11 @@ export function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const storedEvents = loadStoredUsageEvents(usageStorageKey);
+    setUsageEvents(storedEvents);
 
     const fetchUsage = async () => {
       if (connectionStatus !== 'connected') {
-        setUsageEvents([]);
         setUsageLoading(false);
         return;
       }
@@ -399,11 +434,16 @@ export function DashboardPage() {
       try {
         const payload = await usageApi.getQueue(300);
         if (!cancelled) {
-          setUsageEvents(normalizeUsageEvents(payload));
+          const mergedEvents = mergeUsageEvents(
+            loadStoredUsageEvents(usageStorageKey),
+            normalizeUsageEvents(payload)
+          );
+          saveStoredUsageEvents(usageStorageKey, mergedEvents);
+          setUsageEvents(mergedEvents);
         }
       } catch {
         if (!cancelled) {
-          setUsageEvents([]);
+          setUsageEvents(loadStoredUsageEvents(usageStorageKey));
         }
       } finally {
         if (!cancelled) {
@@ -417,7 +457,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [connectionStatus, apiBase]);
+  }, [connectionStatus, usageStorageKey]);
 
   const providerStatsReady =
     providerStats.gemini !== null &&

@@ -46,6 +46,7 @@ import {
   formatCompactNumber,
   formatDuration,
   getFailedUsageEvents,
+  getUsageStorageKey,
   groupUsageEvents,
   loadStoredUsageEvents,
   mergeUsageEvents,
@@ -90,7 +91,7 @@ const formatRate = (requests: number, range: UsageTimeRange) => {
 };
 
 const axisLabelClass =
-  'pointer-events-none absolute text-[10px] font-medium leading-none text-muted-foreground/60 tabular-nums';
+  'pointer-events-none absolute text-[9px] font-normal leading-none text-muted-foreground/55 tabular-nums';
 
 const getAxisTickIndexes = (length: number, maxTicks = 4) => {
   if (length <= 0) return [];
@@ -687,10 +688,7 @@ export function UsageAnalyticsPage() {
   const hydratedStorageKeyRef = useRef('');
   const requestInFlightRef = useRef(false);
 
-  const storageKey = useMemo(
-    () => `cpamc.usageAnalytics.events.v1:${apiBase || 'default'}`,
-    [apiBase]
-  );
+  const storageKey = useMemo(() => getUsageStorageKey(apiBase), [apiBase]);
   const usageStatisticsEnabled = config?.raw?.['usage-statistics-enabled'];
   const usageDisabled = usageStatisticsEnabled === false;
 

@@ -81,6 +81,9 @@ const SERIES_BUCKET_MS: Record<Exclude<UsageTimeRange, 'all'>, number> = {
 const MAX_STORED_EVENTS = 2400;
 const MAX_FAILURE_BODY_LENGTH = 900;
 
+export const getUsageStorageKey = (apiBase?: string) =>
+  `cpamc.usageAnalytics.events.v1:${apiBase || 'default'}`;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
