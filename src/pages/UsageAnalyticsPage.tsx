@@ -89,6 +89,34 @@ const formatRate = (requests: number, range: UsageTimeRange) => {
   return `${rate >= 10 ? rate.toFixed(0) : rate.toFixed(1)}/min`;
 };
 
+const axisLabelClass =
+  'pointer-events-none absolute text-[10px] font-medium leading-none text-muted-foreground/60 tabular-nums';
+
+const getAxisTickIndexes = (length: number, maxTicks = 4) => {
+  if (length <= 0) return [];
+  if (length <= maxTicks) return Array.from({ length }, (_, index) => index);
+  return Array.from(
+    new Set(
+      Array.from({ length: maxTicks }, (_, index) =>
+        Math.round((index * (length - 1)) / (maxTicks - 1))
+      )
+    )
+  );
+};
+
+const formatAxisTimeLabel = (timestampMs: number, spanMs: number) => {
+  const date = new Date(timestampMs);
+  if (spanMs <= 24 * 60 * 60 * 1000) {
+    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+  return date.toLocaleString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 const formatTime = (timestampMs: number, locale: string) => {
   if (!timestampMs) return '-';
   return new Date(timestampMs).toLocaleString(locale, {
@@ -155,6 +183,7 @@ function MetricCard({
 function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
   const chartData = data.map((point) => ({
     label: point.label,
+    timestampMs: point.timestampMs,
     total: point.totalTokens,
     input: point.inputTokens,
     output: point.outputTokens,
@@ -169,6 +198,11 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     const bottom = padding.top + plotHeight;
+    const xLabels = [
+      { label: '-60m', x: padding.left },
+      { label: '-30m', x: padding.left + plotWidth * 0.5 },
+      { label: 'now', x: padding.left + plotWidth },
+    ];
     const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio, index) => ({
       y: bottom - ratio * plotHeight,
       label: index === 0 ? '0' : `${index * 25}%`,
@@ -211,15 +245,6 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
                 stroke="var(--border-color)"
                 strokeDasharray="4 6"
               />
-              <text
-                x={padding.left - 12}
-                y={tick.y + 4}
-                textAnchor="end"
-                fill="var(--text-tertiary)"
-                fontSize="12"
-              >
-                {tick.label}
-              </text>
             </g>
           ))}
           <polygon
@@ -235,19 +260,38 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
             strokeLinejoin="round"
             opacity="0.72"
           />
-          {[0, 1, 2, 3, 4, 5].map((index) => (
-            <text
-              key={index}
-              x={padding.left + (plotWidth * index) / 5}
-              y={height - 12}
-              textAnchor={index === 0 ? 'start' : index === 5 ? 'end' : 'middle'}
-              fill="var(--text-tertiary)"
-              fontSize="12"
-            >
-              {index === 0 ? 'now' : `-${(5 - index) * 10}m`}
-            </text>
-          ))}
         </svg>
+        {yTicks.map((tick) => (
+          <span
+            key={tick.label}
+            className={axisLabelClass}
+            style={{
+              left: `${((padding.left - 12) / width) * 100}%`,
+              top: `${(tick.y / height) * 100}%`,
+              transform: 'translate(-100%, -50%)',
+            }}
+          >
+            {tick.label}
+          </span>
+        ))}
+        {xLabels.map((tick, index) => (
+          <span
+            key={tick.label}
+            className={axisLabelClass}
+            style={{
+              left: `${(tick.x / width) * 100}%`,
+              bottom: '8px',
+              transform:
+                index === 0
+                  ? 'translateX(0)'
+                  : index === xLabels.length - 1
+                    ? 'translateX(-100%)'
+                    : 'translateX(-50%)',
+            }}
+          >
+            {tick.label}
+          </span>
+        ))}
         <div className="absolute inset-0 grid place-items-center">
           <div className="flex max-w-md items-center gap-4 rounded-md border bg-card/95 p-5 text-left shadow-sm">
             <div className="grid size-10 shrink-0 place-items-center rounded-md border bg-muted text-muted-foreground">
@@ -279,14 +323,18 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
     chartData.map((point, index) => `${xFor(index)},${yFor(point[key])}`).join(' ');
   const totalPoints = linePoints('total');
   const totalArea = `${padding.left},${bottom} ${totalPoints} ${padding.left + plotWidth},${bottom}`;
-  const xTickStep = Math.max(1, Math.ceil(chartData.length / 6));
+  const xTickIndexes = getAxisTickIndexes(chartData.length, 4);
+  const spanMs =
+    chartData.length > 1
+      ? chartData[chartData.length - 1].timestampMs - chartData[0].timestampMs
+      : 0;
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
     y: bottom - ratio * plotHeight,
     label: formatCompactNumber(maxValue * ratio),
   }));
 
   return (
-    <div className="h-[360px] w-full overflow-hidden rounded-md border bg-background">
+    <div className="relative h-[360px] w-full overflow-hidden rounded-md border bg-background">
       <svg
         className="h-full w-full"
         viewBox={`0 0 ${width} ${height}`}
@@ -311,15 +359,6 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
               stroke="var(--border-color)"
               strokeDasharray="4 6"
             />
-            <text
-              x={padding.left - 12}
-              y={tick.y + 4}
-              textAnchor="end"
-              fill="var(--text-tertiary)"
-              fontSize="12"
-            >
-              {tick.label}
-            </text>
           </g>
         ))}
         <polygon points={totalArea} fill="url(#tokenTotalFill)" />
@@ -329,17 +368,6 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
         <polyline points={linePoints('reasoning')} fill="none" stroke="#8b5cf6" strokeWidth="2" strokeLinejoin="round" />
         {chartData.map((point, index) => (
           <g key={`${point.label}-${index}`}>
-            {index % xTickStep === 0 || index === chartData.length - 1 ? (
-              <text
-                x={xFor(index)}
-                y={height - 12}
-                textAnchor={index === 0 ? 'start' : index === chartData.length - 1 ? 'end' : 'middle'}
-                fill="var(--text-tertiary)"
-                fontSize="12"
-              >
-                {point.label}
-              </text>
-            ) : null}
             <circle cx={xFor(index)} cy={yFor(point.total)} r="3" fill="#0f172a">
               <title>
                 {point.label}: {formatCompactNumber(point.total)} tokens / {formatCompactNumber(point.requests)} req
@@ -348,6 +376,40 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
           </g>
         ))}
       </svg>
+      {yTicks.map((tick) => (
+        <span
+          key={tick.label}
+          className={axisLabelClass}
+          style={{
+            left: `${((padding.left - 12) / width) * 100}%`,
+            top: `${(tick.y / height) * 100}%`,
+            transform: 'translate(-100%, -50%)',
+          }}
+        >
+          {tick.label}
+        </span>
+      ))}
+      {xTickIndexes.map((index) => {
+        const point = chartData[index];
+        return (
+          <span
+            key={`${point.timestampMs}-${index}`}
+            className={axisLabelClass}
+            style={{
+              left: `${(xFor(index) / width) * 100}%`,
+              bottom: '8px',
+              transform:
+                index === 0
+                  ? 'translateX(0)'
+                  : index === chartData.length - 1
+                    ? 'translateX(-100%)'
+                    : 'translateX(-50%)',
+            }}
+          >
+            {formatAxisTimeLabel(point.timestampMs, spanMs)}
+          </span>
+        );
+      })}
     </div>
   );
 }
