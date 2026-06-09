@@ -51,4 +51,16 @@
   &--animating &__layer:not(.page-transition__layer--exit):not(.page-transition__layer--stacked) {
     position: relative;
   }
+
+  &--disabled {
+    flex: 1 0 auto;
+    min-height: 100%;
+    overflow: visible;
+
+    > .page-transition__layer {
+      flex: 0 0 auto;
+      min-height: 100%;
+      overflow: visible;
+    }
+  }
 }

@@ -413,7 +413,7 @@ export function PageTransition({
 
   if (disabled) {
     return (
-      <div className="page-transition">
+      <div className="page-transition page-transition--disabled">
         <div className="page-transition__layer">
           <PageTransitionLayerContext.Provider
             value={PAGE_TRANSITION_LAYER_CONTEXT_VALUES.current}
