@@ -972,6 +972,7 @@ export function LogsPage() {
 
         {activeTab === 'errors' && (
           <Card
+            className={styles.errorLogCard}
             extra={
               <Button
                 variant="secondary"
@@ -984,7 +985,7 @@ export function LogsPage() {
               </Button>
             }
           >
-            <div className="stack">
+            <div className={styles.errorContent}>
               <div className="hint">{t('logs.error_logs_description')}</div>
 
               {isHomeRuntime && (
