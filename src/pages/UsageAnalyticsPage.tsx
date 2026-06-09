@@ -683,6 +683,7 @@ export function UsageAnalyticsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
+  const [storageHydrated, setStorageHydrated] = useState(false);
   const hydratedStorageKeyRef = useRef('');
   const requestInFlightRef = useRef(false);
 
@@ -694,13 +695,15 @@ export function UsageAnalyticsPage() {
   const usageDisabled = usageStatisticsEnabled === false;
 
   useEffect(() => {
-    hydratedStorageKeyRef.current = storageKey;
     let cancelled = false;
+    setStorageHydrated(false);
     window.queueMicrotask(() => {
       if (cancelled) return;
       setEvents(loadStoredUsageEvents(storageKey));
       setLastLoadedAt(null);
       setError('');
+      hydratedStorageKeyRef.current = storageKey;
+      setStorageHydrated(true);
     });
     return () => {
       cancelled = true;
@@ -708,9 +711,10 @@ export function UsageAnalyticsPage() {
   }, [storageKey]);
 
   useEffect(() => {
+    if (!storageHydrated) return;
     if (hydratedStorageKeyRef.current !== storageKey) return;
     saveStoredUsageEvents(storageKey, events);
-  }, [events, storageKey]);
+  }, [events, storageHydrated, storageKey]);
 
   const loadUsageQueue = useCallback(async () => {
     if (connectionStatus !== 'connected') return;
