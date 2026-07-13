@@ -1,6 +1,8 @@
 /**
  * Thin mappers: Keeper API → UI display shapes.
- * No re-bucketing / no inventing series finer than Keeper returns.
+ * Does not invent finer buckets than Keeper; only zero-fills missing
+ * hour/day slots inside the API range so a single sparse point is not
+ * stretched into a full-width flat line.
  */
 
 import type {
@@ -11,9 +13,165 @@ import type {
 } from '@/services/api/keeper';
 import type { TokenSeriesPoint, UsageEvent, UsageGroup, UsageTokens } from '@/utils/usageAnalytics';
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 const numberValue = (value: unknown, fallback = 0) => {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? n : fallback;
+};
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+const parseOffsetMinutes = (value?: string | null): number | null => {
+  if (!value) return null;
+  const match = value.match(/([+-])(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const sign = match[1] === '-' ? -1 : 1;
+  return sign * (Number(match[2]) * 60 + Number(match[3]));
+};
+
+const formatOffset = (offsetMin: number) => {
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  return `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`;
+};
+
+const parseBucketKey = (key: string, offsetMin: number) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+    return Date.parse(`${key}T00:00:00${formatOffset(offsetMin)}`);
+  }
+  const parsed = Date.parse(key);
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const floorToBucket = (ms: number, offsetMin: number, bucketMs: number) => {
+  const local = ms + offsetMin * 60_000;
+  return Math.floor(local / bucketMs) * bucketMs - offsetMin * 60_000;
+};
+
+const seriesLabel = (timestampMs: number, mode: 'hour' | 'day') => {
+  if (!Number.isFinite(timestampMs)) return '-';
+  if (mode === 'day') {
+    return new Date(timestampMs).toLocaleDateString(undefined, {
+      month: '2-digit',
+      day: '2-digit',
+    });
+  }
+  return new Date(timestampMs).toLocaleString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+type SparsePoint = {
+  timestampMs: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  requests: number;
+};
+
+/**
+ * Expand sparse Keeper hour/day points across [rangeStart, rangeEnd].
+ * Values stay exactly as returned; missing slots are 0.
+ */
+const fillSeriesWindow = (
+  sparse: SparsePoint[],
+  rangeStart?: string,
+  rangeEnd?: string,
+  granularity?: string,
+  sourceKeys: string[] = []
+): TokenSeriesPoint[] => {
+  const offsetMin =
+    parseOffsetMinutes(sourceKeys[0]) ??
+    parseOffsetMinutes(rangeStart) ??
+    parseOffsetMinutes(rangeEnd) ??
+    8 * 60;
+
+  let mode: 'hour' | 'day' =
+    granularity === 'daily' || granularity === 'day' ? 'day' : 'hour';
+
+  // Day keys look like "2026-07-14" without a time component.
+  if (sourceKeys.length > 0 && sourceKeys.every((key) => /^\d{4}-\d{2}-\d{2}$/.test(key))) {
+    mode = 'day';
+  } else if (granularity !== 'hourly' && sparse.length > 1) {
+    const allMidnight = sparse.every((point) => {
+      const local = new Date(point.timestampMs + offsetMin * 60_000);
+      return local.getUTCHours() === 0 && local.getUTCMinutes() === 0;
+    });
+    const span = sparse[sparse.length - 1].timestampMs - sparse[0].timestampMs;
+    if (allMidnight && span >= DAY_MS) mode = 'day';
+  }
+
+  const bucketMs = mode === 'day' ? DAY_MS : HOUR_MS;
+  const byBucket = new Map<number, SparsePoint>();
+  for (const point of sparse) {
+    if (!Number.isFinite(point.timestampMs)) continue;
+    const bucket = floorToBucket(point.timestampMs, offsetMin, bucketMs);
+    const prev = byBucket.get(bucket);
+    if (!prev) {
+      byBucket.set(bucket, { ...point, timestampMs: bucket });
+    } else {
+      byBucket.set(bucket, {
+        timestampMs: bucket,
+        totalTokens: prev.totalTokens + point.totalTokens,
+        inputTokens: prev.inputTokens + point.inputTokens,
+        outputTokens: prev.outputTokens + point.outputTokens,
+        reasoningTokens: prev.reasoningTokens + point.reasoningTokens,
+        requests: prev.requests + point.requests,
+      });
+    }
+  }
+
+  const startRaw = rangeStart ? Date.parse(rangeStart) : NaN;
+  const endRaw = rangeEnd ? Date.parse(rangeEnd) : NaN;
+  const dataTimes = Array.from(byBucket.keys()).sort((a, b) => a - b);
+  const startMs = Number.isFinite(startRaw) ? startRaw : dataTimes[0] ?? NaN;
+  const endMs = Number.isFinite(endRaw)
+    ? endRaw
+    : dataTimes[dataTimes.length - 1] ?? Date.now();
+
+  const toPoint = (point: SparsePoint): TokenSeriesPoint => ({
+    timestampMs: point.timestampMs,
+    label: seriesLabel(point.timestampMs, mode),
+    totalTokens: point.totalTokens,
+    inputTokens: point.inputTokens,
+    outputTokens: point.outputTokens,
+    reasoningTokens: point.reasoningTokens,
+    requests: point.requests,
+  });
+
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return sparse
+      .slice()
+      .sort((a, b) => a.timestampMs - b.timestampMs)
+      .map(toPoint);
+  }
+
+  const points: TokenSeriesPoint[] = [];
+  let cursor = floorToBucket(startMs, offsetMin, bucketMs);
+  const last = floorToBucket(endMs, offsetMin, bucketMs);
+  let guard = 0;
+  while (cursor <= last && guard < 800) {
+    const hit = byBucket.get(cursor);
+    points.push({
+      timestampMs: cursor,
+      label: seriesLabel(cursor, mode),
+      totalTokens: hit?.totalTokens ?? 0,
+      inputTokens: hit?.inputTokens ?? 0,
+      outputTokens: hit?.outputTokens ?? 0,
+      reasoningTokens: hit?.reasoningTokens ?? 0,
+      requests: hit?.requests ?? 0,
+    });
+    cursor += bucketMs;
+    guard += 1;
+  }
+
+  return points.length ? points : sparse.map(toPoint);
 };
 
 const emptyTokens = (): UsageTokens => ({
@@ -137,27 +295,23 @@ export const overviewToSummary = (overview: KeeperOverviewResponse | null): Over
   };
 };
 
-/** Map Keeper overview.series maps exactly (hour/day keys as returned). */
+/** Map Keeper overview.series and zero-fill missing hour/day slots in range. */
 export const overviewSeriesToTokenSeries = (
   overview: KeeperOverviewResponse | null
 ): TokenSeriesPoint[] => {
   const requests = overview?.series?.requests ?? {};
   const tokens = overview?.series?.tokens ?? {};
   const keys = Array.from(new Set([...Object.keys(requests), ...Object.keys(tokens)])).sort();
+  const offsetMin =
+    parseOffsetMinutes(keys[0]) ??
+    parseOffsetMinutes(overview?.range_start) ??
+    parseOffsetMinutes(overview?.range_end) ??
+    8 * 60;
 
-  return keys.map((key) => {
-    const timestampMs = Date.parse(key) || 0;
-    const label = Number.isFinite(timestampMs)
-      ? new Date(timestampMs).toLocaleString(undefined, {
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-      : key;
+  const sparse: SparsePoint[] = keys.map((key) => {
+    const timestampMs = parseBucketKey(key, offsetMin);
     return {
-      timestampMs,
-      label,
+      timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
       totalTokens: numberValue(tokens[key]),
       inputTokens: 0,
       outputTokens: 0,
@@ -165,26 +319,36 @@ export const overviewSeriesToTokenSeries = (
       requests: numberValue(requests[key]),
     };
   });
+
+  // 7d / 30d overview series uses day keys; short windows use hour keys.
+  const granularity = keys.some((key) => key.includes('T')) ? 'hourly' : 'daily';
+
+  return fillSeriesWindow(
+    sparse,
+    overview?.range_start,
+    overview?.range_end,
+    granularity,
+    keys
+  );
 };
 
-/** Prefer analysis.token_usage when present (same hourly/daily as Keeper analysis). */
+/** Map analysis.token_usage and zero-fill missing slots in analysis range. */
 export const analysisTokenUsageToSeries = (
   analysis: KeeperAnalysisResponse | null
 ): TokenSeriesPoint[] => {
   const rows = analysis?.token_usage ?? [];
-  return rows.map((row) => {
+  const keys = rows.map((row) => String(row.bucket ?? '')).filter(Boolean);
+  const offsetMin =
+    parseOffsetMinutes(keys[0]) ??
+    parseOffsetMinutes(analysis?.range_start) ??
+    parseOffsetMinutes(analysis?.range_end) ??
+    8 * 60;
+
+  const sparse: SparsePoint[] = rows.map((row) => {
     const key = String(row.bucket ?? '');
-    const timestampMs = Date.parse(key) || 0;
+    const timestampMs = parseBucketKey(key, offsetMin);
     return {
-      timestampMs,
-      label: Number.isFinite(timestampMs)
-        ? new Date(timestampMs).toLocaleString(undefined, {
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-        : key,
+      timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
       totalTokens: numberValue(row.total_tokens),
       inputTokens: numberValue(row.input_tokens),
       outputTokens: numberValue(row.output_tokens),
@@ -192,6 +356,14 @@ export const analysisTokenUsageToSeries = (
       requests: numberValue(row.requests),
     };
   });
+
+  return fillSeriesWindow(
+    sparse,
+    analysis?.range_start,
+    analysis?.range_end,
+    analysis?.granularity,
+    keys
+  );
 };
 
 const compositionToGroups = (

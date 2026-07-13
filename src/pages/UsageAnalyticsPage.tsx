@@ -85,8 +85,9 @@ const formatPercent = (value: number) =>
 
 
 
+// Match CardDescription style used by "Input / Output / Reasoning 聚合"
 const axisLabelClass =
-  'pointer-events-none absolute text-[9px] font-normal leading-none text-muted-foreground/55 tabular-nums';
+  'pointer-events-none absolute text-sm font-normal leading-none text-muted-foreground tabular-nums';
 
 const getAxisTickIndexes = (length: number, maxTicks = 4) => {
   if (length <= 0) return [];
@@ -305,29 +306,40 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
 
   const width = 960;
   const height = 320;
-  const padding = { top: 24, right: 24, bottom: 38, left: 58 };
+  const padding = { top: 28, right: 24, bottom: 44, left: 64 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const bottom = padding.top + plotHeight;
-  const maxValue = Math.max(...chartData.map((point) => point.total), 1);
-  // Single-point series still needs a horizontal segment so the chart isn't a lonely dot.
-  const plotCount = Math.max(chartData.length, 2);
+  const maxValue = Math.max(
+    ...chartData.map((point) => Math.max(point.total, point.input, point.output, point.reasoning)),
+    1
+  );
   const xFor = (index: number) =>
-    padding.left + (plotWidth * index) / Math.max(1, plotCount - 1);
+    chartData.length <= 1
+      ? padding.left + plotWidth * 0.5
+      : padding.left + (plotWidth * index) / (chartData.length - 1);
   const yFor = (value: number) => bottom - (Math.max(0, value) / maxValue) * plotHeight;
   const linePoints = (key: 'total' | 'input' | 'output' | 'reasoning') => {
     if (chartData.length === 1) {
+      // Short stub around the single point — never stretch across the full width.
+      const x = xFor(0);
       const y = yFor(chartData[0][key]);
-      return `${padding.left},${y} ${padding.left + plotWidth},${y}`;
+      const half = Math.min(36, plotWidth * 0.08);
+      return `${x - half},${y} ${x + half},${y}`;
     }
     return chartData.map((point, index) => `${xFor(index)},${yFor(point[key])}`).join(' ');
   };
   const totalPoints = linePoints('total');
   const totalArea =
     chartData.length === 1
-      ? `${padding.left},${bottom} ${padding.left},${yFor(chartData[0].total)} ${padding.left + plotWidth},${yFor(chartData[0].total)} ${padding.left + plotWidth},${bottom}`
+      ? (() => {
+          const x = xFor(0);
+          const y = yFor(chartData[0].total);
+          const half = Math.min(36, plotWidth * 0.08);
+          return `${x - half},${bottom} ${x - half},${y} ${x + half},${y} ${x + half},${bottom}`;
+        })()
       : `${padding.left},${bottom} ${totalPoints} ${xFor(chartData.length - 1)},${bottom}`;
-  const xTickIndexes = getAxisTickIndexes(chartData.length, 4);
+  const xTickIndexes = getAxisTickIndexes(chartData.length, 5);
   const spanMs =
     chartData.length > 1
       ? chartData[chartData.length - 1].timestampMs - chartData[0].timestampMs
@@ -336,84 +348,146 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
     y: bottom - ratio * plotHeight,
     label: formatCompactNumber(maxValue * ratio),
   }));
+  const hasInput = chartData.some((point) => point.input > 0);
+  const hasOutput = chartData.some((point) => point.output > 0);
+  const hasReasoning = chartData.some((point) => point.reasoning > 0);
 
   return (
-    <div className="relative h-[360px] w-full overflow-hidden rounded-md border bg-background">
-      <svg
-        className="h-full w-full"
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label="Token usage trend"
-        preserveAspectRatio="none"
-      >
-        <defs>
-          <linearGradient id="tokenTotalFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#0f172a" stopOpacity={0.22} />
-            <stop offset="95%" stopColor="#0f172a" stopOpacity={0.02} />
-          </linearGradient>
-        </defs>
-        <rect width={width} height={height} fill="var(--bg-primary)" />
-        {yTicks.map((tick) => (
-          <g key={tick.label}>
-            <line
-              x1={padding.left}
-              x2={padding.left + plotWidth}
-              y1={tick.y}
-              y2={tick.y}
-              stroke="var(--border-color)"
-              strokeDasharray="4 6"
-            />
-          </g>
-        ))}
-        <polygon points={totalArea} fill="url(#tokenTotalFill)" />
-        <polyline points={totalPoints} fill="none" stroke="#0f172a" strokeWidth="3" strokeLinejoin="round" />
-        <polyline points={linePoints('input')} fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round" />
-        <polyline points={linePoints('output')} fill="none" stroke="#10b981" strokeWidth="2" strokeLinejoin="round" />
-        <polyline points={linePoints('reasoning')} fill="none" stroke="#8b5cf6" strokeWidth="2" strokeLinejoin="round" />
-        {chartData.map((point, index) => (
-          <g key={`${point.label}-${index}`}>
-            <circle cx={xFor(index)} cy={yFor(point.total)} r="3" fill="#0f172a">
-              <title>
-                {point.label}: {formatCompactNumber(point.total)} tokens / {formatCompactNumber(point.requests)} req
-              </title>
-            </circle>
-          </g>
-        ))}
-      </svg>
-      {yTicks.map((tick) => (
-        <span
-          key={tick.label}
-          className={axisLabelClass}
-          style={{
-            left: `${((padding.left - 12) / width) * 100}%`,
-            top: `${(tick.y / height) * 100}%`,
-            transform: 'translate(-100%, -50%)',
-          }}
-        >
-          {tick.label}
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block size-2.5 rounded-sm bg-[#0f172a]" />
+          Total
         </span>
-      ))}
-      {xTickIndexes.map((index) => {
-        const point = chartData[index];
-        return (
+        {hasInput ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block size-2.5 rounded-sm bg-[#2563eb]" />
+            Input
+          </span>
+        ) : null}
+        {hasOutput ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block size-2.5 rounded-sm bg-[#10b981]" />
+            Output
+          </span>
+        ) : null}
+        {hasReasoning ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block size-2.5 rounded-sm bg-[#8b5cf6]" />
+            Reasoning
+          </span>
+        ) : null}
+      </div>
+      <div className="relative h-[360px] w-full overflow-hidden rounded-md border bg-background">
+        <svg
+          className="h-full w-full"
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label="Token usage trend"
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <linearGradient id="tokenTotalFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#0f172a" stopOpacity={0.22} />
+              <stop offset="95%" stopColor="#0f172a" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <rect width={width} height={height} fill="var(--bg-primary)" />
+          {yTicks.map((tick) => (
+            <g key={tick.label}>
+              <line
+                x1={padding.left}
+                x2={padding.left + plotWidth}
+                y1={tick.y}
+                y2={tick.y}
+                stroke="var(--border-color)"
+                strokeDasharray="4 6"
+              />
+            </g>
+          ))}
+          <polygon points={totalArea} fill="url(#tokenTotalFill)" />
+          <polyline
+            points={totalPoints}
+            fill="none"
+            stroke="#0f172a"
+            strokeWidth="3"
+            strokeLinejoin="round"
+          />
+          {hasInput ? (
+            <polyline
+              points={linePoints('input')}
+              fill="none"
+              stroke="#2563eb"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+          ) : null}
+          {hasOutput ? (
+            <polyline
+              points={linePoints('output')}
+              fill="none"
+              stroke="#10b981"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+          ) : null}
+          {hasReasoning ? (
+            <polyline
+              points={linePoints('reasoning')}
+              fill="none"
+              stroke="#8b5cf6"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+          ) : null}
+          {chartData.map((point, index) =>
+            point.total > 0 || point.requests > 0 ? (
+              <g key={`${point.label}-${index}`}>
+                <circle cx={xFor(index)} cy={yFor(point.total)} r="3.5" fill="#0f172a">
+                  <title>
+                    {point.label}: {formatCompactNumber(point.total)} tokens /{' '}
+                    {formatCompactNumber(point.requests)} req
+                  </title>
+                </circle>
+              </g>
+            ) : null
+          )}
+        </svg>
+        {yTicks.map((tick) => (
           <span
-            key={`${point.timestampMs}-${index}`}
+            key={tick.label}
             className={axisLabelClass}
             style={{
-              left: `${(xFor(index) / width) * 100}%`,
-              bottom: '8px',
-              transform:
-                index === 0
-                  ? 'translateX(0)'
-                  : index === chartData.length - 1
-                    ? 'translateX(-100%)'
-                    : 'translateX(-50%)',
+              left: `${((padding.left - 12) / width) * 100}%`,
+              top: `${(tick.y / height) * 100}%`,
+              transform: 'translate(-100%, -50%)',
             }}
           >
-            {formatAxisTimeLabel(point.timestampMs, spanMs)}
+            {tick.label}
           </span>
-        );
-      })}
+        ))}
+        {xTickIndexes.map((index) => {
+          const point = chartData[index];
+          return (
+            <span
+              key={`${point.timestampMs}-${index}`}
+              className={axisLabelClass}
+              style={{
+                left: `${(xFor(index) / width) * 100}%`,
+                bottom: '10px',
+                transform:
+                  index === 0
+                    ? 'translateX(0)'
+                    : index === chartData.length - 1
+                      ? 'translateX(-100%)'
+                      : 'translateX(-50%)',
+              }}
+            >
+              {formatAxisTimeLabel(point.timestampMs, spanMs)}
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1036,10 +1110,10 @@ export function UsageAnalyticsPage() {
                   })
                 : viewMode === 'cost'
                   ? t('usage.cost_subtitle', {
-                      defaultValue: `Keeper /usage/analysis · 粒度 ${seriesGranularity}`,
+                      defaultValue: 'Input / Output / Reasoning 聚合',
                     })
                   : t('usage.token_curve_subtitle', {
-                      defaultValue: `Keeper /usage/overview.series · 粒度 ${seriesGranularity}`,
+                      defaultValue: 'Input / Output / Reasoning 聚合',
                     })}
             </CardDescription>
           </div>
