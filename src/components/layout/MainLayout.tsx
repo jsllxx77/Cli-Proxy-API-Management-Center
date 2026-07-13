@@ -19,8 +19,10 @@ import {
   IconSidebarDashboard,
   IconSidebarLogs,
   IconSidebarOauth,
+  IconSidebarPlugins,
   IconSidebarProviders,
   IconSidebarQuota,
+  IconSidebarStore,
   IconSidebarSystem,
   IconChartLine,
 } from '@/components/ui/icons';
@@ -45,6 +47,8 @@ const sidebarIcons: Record<string, ReactNode> = {
   oauth: <IconSidebarOauth size={18} />,
   quota: <IconSidebarQuota size={18} />,
   usage: <IconChartLine size={18} />,
+  plugins: <IconSidebarPlugins size={18} />,
+  pluginStore: <IconSidebarStore size={18} />,
   config: <IconSidebarConfig size={18} />,
   logs: <IconSidebarLogs size={18} />,
   system: <IconSidebarSystem size={18} />,
@@ -216,6 +220,7 @@ export function MainLayout() {
   const location = useLocation();
 
   const logout = useAuthStore((state) => state.logout);
+  const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
 
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
   const clearCache = useConfigStore((state) => state.clearCache);
@@ -247,6 +252,9 @@ export function MainLayout() {
     if (pathname.startsWith('/oauth')) return t('nav.oauth');
     if (pathname.startsWith('/quota')) return t('nav.quota_management');
     if (pathname.startsWith('/logs')) return t('nav.logs');
+    if (pathname.startsWith('/plugins')) return t('nav.plugins');
+    if (pathname.startsWith('/plugin-store')) return t('nav.plugin_store');
+    if (pathname.startsWith('/plugin-pages')) return t('nav.plugins');
     if (pathname.startsWith('/config')) return t('nav.config_management');
     if (pathname.startsWith('/system')) return t('nav.system_info');
     return fullBrandName;
@@ -471,6 +479,22 @@ export function MainLayout() {
           metaKey: 'nav_meta.config_management',
           icon: sidebarIcons.config,
         },
+        ...(supportsPlugin
+          ? [
+              {
+                path: '/plugins',
+                labelKey: 'nav.plugins',
+                metaKey: 'nav_meta.plugins',
+                icon: sidebarIcons.plugins,
+              },
+              {
+                path: '/plugin-store',
+                labelKey: 'nav.plugin_store',
+                metaKey: 'nav_meta.plugin_store',
+                icon: sidebarIcons.pluginStore,
+              },
+            ]
+          : []),
         {
           path: '/system',
           labelKey: 'nav.system_info',
@@ -495,7 +519,8 @@ export function MainLayout() {
         if (normalizedPath.startsWith('/ai-providers/codex')) return aiProvidersIndex + 0.2;
         if (normalizedPath.startsWith('/ai-providers/claude')) return aiProvidersIndex + 0.3;
         if (normalizedPath.startsWith('/ai-providers/vertex')) return aiProvidersIndex + 0.4;
-        if (normalizedPath.startsWith('/ai-providers/ampcode')) return aiProvidersIndex + 0.5;
+        if (normalizedPath.startsWith('/ai-providers/xai')) return aiProvidersIndex + 0.5;
+        if (normalizedPath.startsWith('/ai-providers/interactions')) return aiProvidersIndex + 0.55;
         if (normalizedPath.startsWith('/ai-providers/openai')) return aiProvidersIndex + 0.6;
         return aiProvidersIndex + 0.05;
       }

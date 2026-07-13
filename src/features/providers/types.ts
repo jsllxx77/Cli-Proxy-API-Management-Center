@@ -7,6 +7,8 @@ export type ProviderBrand =
   | 'codex'
   | 'claude'
   | 'vertex'
+  | 'xai'
+  | 'interactions'
   | 'openaiCompatibility'
   | 'ampcode';
 
@@ -15,6 +17,8 @@ export type ProviderResourceSelector =
   | { brand: 'codex'; apiKey: string; baseUrl?: string; index: number }
   | { brand: 'claude'; apiKey: string; baseUrl?: string; index: number }
   | { brand: 'vertex'; apiKey: string; baseUrl?: string; index: number }
+  | { brand: 'xai'; apiKey: string; baseUrl?: string; index: number }
+  | { brand: 'interactions'; apiKey: string; baseUrl?: string; index: number }
   | { brand: 'openaiCompatibility'; name: string; index: number }
   | { brand: 'ampcode' };
 
@@ -84,6 +88,8 @@ export interface ProviderSnapshot {
 export interface ModelEntryInput {
   name: string;
   alias?: string;
+  displayName?: string;
+  forceMapping?: boolean;
   priority?: number;
   testModel?: string;
 }

@@ -34,9 +34,17 @@ const normalizeModelAliases = (models: unknown): ModelAlias[] => {
       const alias = item.alias;
       const priority = item.priority;
       const testModel = item['test-model'];
+      const displayName = item['display-name'] ?? item.displayName;
+      const forceMapping = item['force-mapping'] ?? item.forceMapping;
       const entry: ModelAlias = { name: String(name) };
       if (alias && alias !== name) {
         entry.alias = String(alias);
+      }
+      if (displayName) {
+        entry.displayName = String(displayName);
+      }
+      if (typeof forceMapping === 'boolean') {
+        entry.forceMapping = forceMapping;
       }
       if (priority !== undefined) {
         const parsed = Number(priority);
@@ -46,6 +54,12 @@ const normalizeModelAliases = (models: unknown): ModelAlias[] => {
       }
       if (testModel) {
         entry.testModel = String(testModel);
+      }
+      if (typeof item.image === 'boolean') {
+        entry.image = item.image;
+      }
+      if (isRecord(item.thinking)) {
+        entry.thinking = item.thinking;
       }
       return entry;
     })
@@ -138,6 +152,8 @@ const normalizeProviderKeyConfig = (item: unknown): ProviderKeyConfig | null => 
   if (models.length) config.models = models;
   const excludedModels = normalizeExcludedModels(record?.['excluded-models']);
   if (excludedModels.length) config.excludedModels = excludedModels;
+  const disableCooling = normalizeBoolean(record?.['disable-cooling']);
+  if (disableCooling !== undefined) config.disableCooling = disableCooling;
   const authIndex = normalizeAuthIndex(record?.['auth-index']);
   if (authIndex) config.authIndex = authIndex;
 
@@ -194,6 +210,8 @@ const normalizeGeminiKeyConfig = (item: unknown): GeminiKeyConfig | null => {
   if (headers) config.headers = headers;
   const excludedModels = normalizeExcludedModels(record?.['excluded-models']);
   if (excludedModels.length) config.excludedModels = excludedModels;
+  const disableCooling = normalizeBoolean(record?.['disable-cooling']);
+  if (disableCooling !== undefined) config.disableCooling = disableCooling;
   const authIndex = normalizeAuthIndex(record?.['auth-index']);
   if (authIndex) config.authIndex = authIndex;
   return config;
@@ -384,9 +402,23 @@ export const normalizeConfigResponse = (raw: unknown): Config => {
       .filter(Boolean) as GeminiKeyConfig[];
   }
 
+  const interactionsList = raw['interactions-api-key'];
+  if (Array.isArray(interactionsList)) {
+    config.interactionsApiKeys = interactionsList
+      .map((item) => normalizeGeminiKeyConfig(item))
+      .filter(Boolean) as GeminiKeyConfig[];
+  }
+
   const codexList = raw['codex-api-key'];
   if (Array.isArray(codexList)) {
     config.codexApiKeys = codexList
+      .map((item) => normalizeProviderKeyConfig(item))
+      .filter(Boolean) as ProviderKeyConfig[];
+  }
+
+  const xaiList = raw['xai-api-key'];
+  if (Array.isArray(xaiList)) {
+    config.xaiApiKeys = xaiList
       .map((item) => normalizeProviderKeyConfig(item))
       .filter(Boolean) as ProviderKeyConfig[];
   }

@@ -461,3 +461,317 @@ export const formatDuration = (value: number) => {
   if (value < 1000) return `${Math.round(value)}ms`;
   return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}s`;
 };
+
+/* -------------------------------------------------------------------------- */
+/* Cost estimation (local price table, LiteLLM/OpenRouter-style per 1M tokens) */
+/* -------------------------------------------------------------------------- */
+
+export interface ModelPriceEntry {
+  /** model id or alias match key (case-insensitive) */
+  model: string;
+  /** USD per 1M input tokens */
+  inputPerMillion: number;
+  /** USD per 1M output tokens */
+  outputPerMillion: number;
+  /** USD per 1M cached/read tokens (optional, falls back to input * 0.1) */
+  cachePerMillion?: number;
+}
+
+export interface UsageCostBreakdown {
+  inputCost: number;
+  outputCost: number;
+  cacheCost: number;
+  reasoningCost: number;
+  totalCost: number;
+  priced: boolean;
+}
+
+export interface UsageGroupWithCost extends UsageGroup {
+  cost: number;
+  pricedRequests: number;
+}
+
+/** Built-in approximate prices (USD / 1M tokens). Override via localStorage. */
+export const DEFAULT_MODEL_PRICES: ModelPriceEntry[] = [
+  { model: 'gpt-5', inputPerMillion: 1.25, outputPerMillion: 10 },
+  { model: 'gpt-5.1', inputPerMillion: 1.25, outputPerMillion: 10 },
+  { model: 'gpt-5.2', inputPerMillion: 1.75, outputPerMillion: 14 },
+  { model: 'gpt-5.4', inputPerMillion: 2.5, outputPerMillion: 15 },
+  { model: 'gpt-5.5', inputPerMillion: 2.5, outputPerMillion: 15 },
+  { model: 'gpt-5.6', inputPerMillion: 2.5, outputPerMillion: 15 },
+  { model: 'gpt-4o', inputPerMillion: 2.5, outputPerMillion: 10 },
+  { model: 'gpt-4o-mini', inputPerMillion: 0.15, outputPerMillion: 0.6 },
+  { model: 'o3', inputPerMillion: 2, outputPerMillion: 8 },
+  { model: 'o4-mini', inputPerMillion: 1.1, outputPerMillion: 4.4 },
+  { model: 'claude-opus', inputPerMillion: 15, outputPerMillion: 75 },
+  { model: 'claude-sonnet', inputPerMillion: 3, outputPerMillion: 15 },
+  { model: 'claude-haiku', inputPerMillion: 0.8, outputPerMillion: 4 },
+  { model: 'gemini-2.5-pro', inputPerMillion: 1.25, outputPerMillion: 10 },
+  { model: 'gemini-2.5-flash', inputPerMillion: 0.3, outputPerMillion: 2.5 },
+  { model: 'gemini-3', inputPerMillion: 2, outputPerMillion: 12 },
+  { model: 'grok-4', inputPerMillion: 3, outputPerMillion: 15 },
+  { model: 'grok-3', inputPerMillion: 3, outputPerMillion: 15 },
+  { model: 'kimi', inputPerMillion: 0.6, outputPerMillion: 2.5 },
+];
+
+export const getModelPricesStorageKey = (apiBase?: string) =>
+  `cpamc.usageAnalytics.prices.v1:${apiBase || 'default'}`;
+
+export const loadModelPrices = (storageKey: string): ModelPriceEntry[] => {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return DEFAULT_MODEL_PRICES;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_MODEL_PRICES;
+    return parsed
+      .map((item): ModelPriceEntry | null => {
+        if (!isRecord(item)) return null;
+        const model = stringValue(item.model);
+        if (!model) return null;
+        return {
+          model,
+          inputPerMillion: numberValue(item.inputPerMillion ?? item.input),
+          outputPerMillion: numberValue(item.outputPerMillion ?? item.output),
+          cachePerMillion:
+            item.cachePerMillion !== undefined || item.cache !== undefined
+              ? numberValue(item.cachePerMillion ?? item.cache)
+              : undefined,
+        };
+      })
+      .filter(Boolean) as ModelPriceEntry[];
+  } catch {
+    return DEFAULT_MODEL_PRICES;
+  }
+};
+
+export const saveModelPrices = (storageKey: string, prices: ModelPriceEntry[]) => {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(prices));
+  } catch {
+    // ignore quota
+  }
+};
+
+const normalizeModelKey = (value: string) => value.trim().toLowerCase();
+
+export const findModelPrice = (
+  prices: ModelPriceEntry[],
+  model: string,
+  alias?: string
+): ModelPriceEntry | null => {
+  const candidates = [alias, model]
+    .map((value) => normalizeModelKey(value || ''))
+    .filter(Boolean);
+  if (!candidates.length) return null;
+
+  // exact match first
+  for (const candidate of candidates) {
+    const exact = prices.find((entry) => normalizeModelKey(entry.model) === candidate);
+    if (exact) return exact;
+  }
+  // prefix / contains match (longest key wins)
+  let best: ModelPriceEntry | null = null;
+  for (const candidate of candidates) {
+    for (const entry of prices) {
+      const key = normalizeModelKey(entry.model);
+      if (!key) continue;
+      if (candidate.includes(key) || key.includes(candidate)) {
+        if (!best || key.length > normalizeModelKey(best.model).length) {
+          best = entry;
+        }
+      }
+    }
+  }
+  return best;
+};
+
+export const estimateEventCost = (
+  event: UsageEvent,
+  prices: ModelPriceEntry[]
+): UsageCostBreakdown => {
+  const price = findModelPrice(prices, event.model, event.alias);
+  if (!price) {
+    return {
+      inputCost: 0,
+      outputCost: 0,
+      cacheCost: 0,
+      reasoningCost: 0,
+      totalCost: 0,
+      priced: false,
+    };
+  }
+
+  const cacheRate = price.cachePerMillion ?? price.inputPerMillion * 0.1;
+  const inputCost = (event.tokens.inputTokens / 1_000_000) * price.inputPerMillion;
+  const outputCost = (event.tokens.outputTokens / 1_000_000) * price.outputPerMillion;
+  // treat reasoning as output-priced when present
+  const reasoningCost = (event.tokens.reasoningTokens / 1_000_000) * price.outputPerMillion;
+  const cacheTokens =
+    event.tokens.cachedTokens + event.tokens.cacheReadTokens + event.tokens.cacheCreationTokens;
+  const cacheCost = (cacheTokens / 1_000_000) * cacheRate;
+  const totalCost = inputCost + outputCost + reasoningCost + cacheCost;
+
+  return {
+    inputCost,
+    outputCost,
+    cacheCost,
+    reasoningCost,
+    totalCost,
+    priced: true,
+  };
+};
+
+export const summarizeUsageCost = (events: UsageEvent[], prices: ModelPriceEntry[]) => {
+  return events.reduce(
+    (acc, event) => {
+      const cost = estimateEventCost(event, prices);
+      acc.totalCost += cost.totalCost;
+      acc.inputCost += cost.inputCost;
+      acc.outputCost += cost.outputCost;
+      acc.cacheCost += cost.cacheCost;
+      acc.reasoningCost += cost.reasoningCost;
+      if (cost.priced) acc.pricedRequests += 1;
+      else acc.unpricedRequests += 1;
+      return acc;
+    },
+    {
+      totalCost: 0,
+      inputCost: 0,
+      outputCost: 0,
+      cacheCost: 0,
+      reasoningCost: 0,
+      pricedRequests: 0,
+      unpricedRequests: 0,
+    }
+  );
+};
+
+export const groupUsageEventsWithCost = (
+  events: UsageEvent[],
+  prices: ModelPriceEntry[],
+  getKey: (event: UsageEvent) => string,
+  limit = 12
+): UsageGroupWithCost[] => {
+  const grouped = new Map<
+    string,
+    UsageGroupWithCost & { latencyTotal: number; ttftTotal: number }
+  >();
+
+  events.forEach((event) => {
+    const key = getKey(event).trim() || 'unknown';
+    const cost = estimateEventCost(event, prices);
+    const existing =
+      grouped.get(key) ??
+      ({
+        key,
+        label: key,
+        requests: 0,
+        failures: 0,
+        totalTokens: 0,
+        avgLatencyMs: 0,
+        avgTtftMs: 0,
+        maxLatencyMs: 0,
+        cost: 0,
+        pricedRequests: 0,
+        latencyTotal: 0,
+        ttftTotal: 0,
+      } satisfies UsageGroupWithCost & { latencyTotal: number; ttftTotal: number });
+
+    existing.requests += 1;
+    existing.failures += event.failed ? 1 : 0;
+    existing.totalTokens += event.tokens.totalTokens;
+    existing.latencyTotal += event.latencyMs;
+    existing.ttftTotal += event.ttftMs;
+    existing.maxLatencyMs = Math.max(existing.maxLatencyMs, event.latencyMs);
+    existing.cost += cost.totalCost;
+    if (cost.priced) existing.pricedRequests += 1;
+    grouped.set(key, existing);
+  });
+
+  return Array.from(grouped.values())
+    .map(({ latencyTotal, ttftTotal, ...group }) => ({
+      ...group,
+      avgLatencyMs: group.requests > 0 ? latencyTotal / group.requests : 0,
+      avgTtftMs: group.requests > 0 ? ttftTotal / group.requests : 0,
+    }))
+    .sort((a, b) => b.cost - a.cost || b.requests - a.requests)
+    .slice(0, limit);
+};
+
+export const formatUsd = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return '$0.00';
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  if (value < 1) return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(2)}`;
+};
+
+export const exportUsageEventsJsonl = (events: UsageEvent[]) =>
+  events
+    .map((event) =>
+      JSON.stringify({
+        id: event.id,
+        timestamp: new Date(event.timestampMs).toISOString(),
+        provider: event.provider,
+        model: event.model,
+        alias: event.alias,
+        endpoint: event.endpoint,
+        api_key: event.apiKey,
+        auth_index: event.authIndex,
+        request_id: event.requestId,
+        latency_ms: event.latencyMs,
+        ttft_ms: event.ttftMs,
+        failed: event.failed,
+        status_code: event.failStatusCode,
+        fail_body: event.failBody,
+        tokens: event.tokens,
+      })
+    )
+    .join('\n');
+
+export const filterUsageEvents = (
+  events: UsageEvent[],
+  filters: {
+    provider?: string;
+    model?: string;
+    apiKey?: string;
+    status?: 'all' | 'success' | 'failed';
+    query?: string;
+  }
+) => {
+  const provider = (filters.provider || '').trim().toLowerCase();
+  const model = (filters.model || '').trim().toLowerCase();
+  const apiKey = (filters.apiKey || '').trim().toLowerCase();
+  const query = (filters.query || '').trim().toLowerCase();
+  const status = filters.status || 'all';
+
+  return events.filter((event) => {
+    if (status === 'success' && event.failed) return false;
+    if (status === 'failed' && !event.failed) return false;
+    if (provider && !event.provider.toLowerCase().includes(provider)) return false;
+    if (
+      model &&
+      !event.model.toLowerCase().includes(model) &&
+      !event.alias.toLowerCase().includes(model)
+    ) {
+      return false;
+    }
+    if (apiKey && !event.apiKey.toLowerCase().includes(apiKey)) return false;
+    if (query) {
+      const haystack = [
+        event.provider,
+        event.model,
+        event.alias,
+        event.endpoint,
+        event.apiKey,
+        event.authIndex,
+        event.requestId,
+        event.failBody,
+        String(event.failStatusCode),
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+};

@@ -34,6 +34,7 @@ const PROVIDER_KEY_FIELDS = [
   'headers',
   'models',
   'excluded-models',
+  'disable-cooling',
   'cloak',
 ] as const;
 
@@ -54,7 +55,7 @@ const OPENAI_PROVIDER_FIELDS = [
   'test-model',
 ] as const;
 
-const MODEL_ALIAS_FIELDS = ['name', 'alias', 'priority', 'test-model'] as const;
+const MODEL_ALIAS_FIELDS = ['name', 'alias', 'display-name', 'force-mapping', 'priority', 'test-model', 'image', 'thinking'] as const;
 
 const API_KEY_ENTRY_FIELDS = ['api-key', 'proxy-url'] as const;
 
@@ -251,11 +252,23 @@ const serializeModelAliases = (models?: ModelAlias[]) =>
           if (model.alias && model.alias !== model.name) {
             payload.alias = model.alias;
           }
+          if (model.displayName?.trim()) {
+            payload['display-name'] = model.displayName.trim();
+          }
+          if (typeof model.forceMapping === 'boolean') {
+            payload['force-mapping'] = model.forceMapping;
+          }
           if (model.priority !== undefined) {
             payload.priority = model.priority;
           }
           if (model.testModel) {
             payload['test-model'] = model.testModel;
+          }
+          if (typeof model.image === 'boolean') {
+            payload.image = model.image;
+          }
+          if (model.thinking && Object.keys(model.thinking).length) {
+            payload.thinking = model.thinking;
           }
           return payload;
         })
@@ -282,6 +295,7 @@ const serializeProviderKey = (config: ProviderKeyConfig) => {
   if (config.excludedModels && config.excludedModels.length) {
     payload['excluded-models'] = config.excludedModels;
   }
+  if (config.disableCooling) payload['disable-cooling'] = true;
   if (config.cloak) {
     const cloakPayload: Record<string, unknown> = {};
     const mode = config.cloak.mode?.trim();
@@ -305,7 +319,14 @@ const serializeVertexModelAliases = (models?: ModelAlias[]) =>
           const name = typeof model?.name === 'string' ? model.name.trim() : '';
           const alias = typeof model?.alias === 'string' ? model.alias.trim() : '';
           if (!name || !alias) return null;
-          return { name, alias };
+          const payload: Record<string, unknown> = { name, alias };
+          if (model.displayName?.trim()) {
+            payload['display-name'] = model.displayName.trim();
+          }
+          if (typeof model.forceMapping === 'boolean') {
+            payload['force-mapping'] = model.forceMapping;
+          }
+          return payload;
         })
         .filter(Boolean)
     : undefined;
@@ -492,4 +513,54 @@ export const providersApi = {
 
   deleteOpenAIProvider: (name: string) =>
     apiClient.delete(`/openai-compatibility?name=${encodeURIComponent(name)}`),
+
+  async getXAIConfigs(): Promise<ProviderKeyConfig[]> {
+    const data = await apiClient.get('/xai-api-key');
+    const list = extractArrayPayload(data, 'xai-api-key');
+    return list
+      .map((item) => normalizeProviderKeyConfig(item))
+      .filter(Boolean) as ProviderKeyConfig[];
+  },
+
+  saveXAIConfigs: async (configs: ProviderKeyConfig[]) =>
+    apiClient.put(
+      '/xai-api-key',
+      await buildPreservedList(
+        'xai-api-key',
+        configs,
+        serializeProviderKey,
+        (raw, payload) => mergeProviderKeyPayload(raw, payload, PROVIDER_KEY_FIELDS),
+        providerKeyIdentity
+      )
+    ),
+
+  updateXAIConfig: (index: number, value: ProviderKeyConfig) =>
+    apiClient.patch('/xai-api-key', { index, value: serializeProviderKey(value) }),
+
+  deleteXAIConfig: (apiKey: string, baseUrl?: string) =>
+    apiClient.delete(`/xai-api-key${buildProviderDeleteQuery(apiKey, baseUrl)}`),
+
+  async getInteractionsKeys(): Promise<GeminiKeyConfig[]> {
+    const data = await apiClient.get('/interactions-api-key');
+    const list = extractArrayPayload(data, 'interactions-api-key');
+    return list.map((item) => normalizeGeminiKeyConfig(item)).filter(Boolean) as GeminiKeyConfig[];
+  },
+
+  saveInteractionsKeys: async (configs: GeminiKeyConfig[]) =>
+    apiClient.put(
+      '/interactions-api-key',
+      await buildPreservedList(
+        'interactions-api-key',
+        configs,
+        serializeGeminiKey,
+        (raw, payload) => mergeProviderKeyPayload(raw, payload, GEMINI_KEY_FIELDS),
+        providerKeyIdentity
+      )
+    ),
+
+  updateInteractionsKey: (index: number, value: GeminiKeyConfig) =>
+    apiClient.patch('/interactions-api-key', { index, value: serializeGeminiKey(value) }),
+
+  deleteInteractionsKey: (apiKey: string, baseUrl?: string) =>
+    apiClient.delete(`/interactions-api-key${buildProviderDeleteQuery(apiKey, baseUrl)}`),
 };

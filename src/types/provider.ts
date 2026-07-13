@@ -6,8 +6,14 @@
 export interface ModelAlias {
   name: string;
   alias?: string;
+  /** Catalog display name shown in /v1/models */
+  displayName?: string;
+  /** Rewrite upstream response model fields back to the client-visible alias */
+  forceMapping?: boolean;
   priority?: number;
   testModel?: string;
+  image?: boolean;
+  thinking?: Record<string, unknown>;
 }
 
 export interface ApiKeyEntry {
@@ -31,6 +37,7 @@ export interface GeminiKeyConfig {
   models?: ModelAlias[];
   headers?: Record<string, string>;
   excludedModels?: string[];
+  disableCooling?: boolean;
   authIndex?: string;
 }
 
@@ -44,6 +51,7 @@ export interface ProviderKeyConfig {
   headers?: Record<string, string>;
   models?: ModelAlias[];
   excludedModels?: string[];
+  disableCooling?: boolean;
   cloak?: CloakConfig;
   authIndex?: string;
 }
@@ -58,6 +66,7 @@ export interface OpenAIProviderConfig {
   models?: ModelAlias[];
   priority?: number;
   testModel?: string;
+  disableCooling?: boolean;
   authIndex?: string;
   [key: string]: unknown;
 }

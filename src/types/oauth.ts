@@ -39,6 +39,8 @@ export interface OAuthModelAliasEntry {
   name: string;
   alias: string;
   fork?: boolean;
+  /** Rewrite upstream response model fields back to the client-visible alias */
+  forceMapping?: boolean;
 }
 
 export type OAuthModelAlias = Record<string, OAuthModelAliasEntry[]>;

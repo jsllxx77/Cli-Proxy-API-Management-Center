@@ -7,7 +7,9 @@ import {
   CheckCircle2,
   Clock,
   Database,
+  DollarSign,
   Download,
+  Filter,
   RefreshCw,
   Server,
   Trash2,
@@ -42,18 +44,28 @@ import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import { downloadBlob } from '@/utils/download';
 import {
   buildTokenSeries,
+  DEFAULT_MODEL_PRICES,
+  estimateEventCost,
+  exportUsageEventsJsonl,
+  filterUsageEvents,
   filterUsageEventsByRange,
   formatCompactNumber,
   formatDuration,
+  formatUsd,
   getFailedUsageEvents,
+  getModelPricesStorageKey,
   getUsageStorageKey,
   groupUsageEvents,
+  groupUsageEventsWithCost,
+  loadModelPrices,
   loadStoredUsageEvents,
   mergeUsageEvents,
   normalizeUsageEvents,
   rankUsageLatency,
   saveStoredUsageEvents,
+  summarizeUsageCost,
   summarizeUsageEvents,
+  type ModelPriceEntry,
   type TokenSeriesPoint,
   type UsageEvent,
   type UsageGroup,
@@ -63,7 +75,9 @@ import { cn } from '@/lib/utils';
 
 const POLL_INTERVAL_MS = 5000;
 const USAGE_QUEUE_COUNT = 300;
-const RECENT_REQUEST_LIMIT = 12;
+const RECENT_REQUEST_LIMIT = 40;
+
+type UsageViewMode = 'overview' | 'monitoring' | 'cost';
 
 const timeRangeOptions: Array<{ value: UsageTimeRange; labelKey: string; fallback: string }> = [
   { value: '15m', labelKey: 'usage.range_15m', fallback: '15 分钟' },
@@ -560,11 +574,17 @@ function RecentEventsTable({
   locale,
   emptyText,
   onDownload,
+  prices,
+  showCost = false,
+  showFailBody = false,
 }: {
   events: UsageEvent[];
   locale: string;
   emptyText: string;
   onDownload: (event: UsageEvent) => void;
+  prices?: ModelPriceEntry[];
+  showCost?: boolean;
+  showFailBody?: boolean;
 }) {
   if (!events.length) {
     return (
@@ -617,55 +637,84 @@ function RecentEventsTable({
             <TableHead>Time</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Provider / Model</TableHead>
+            <TableHead>API Key</TableHead>
             <TableHead>Endpoint</TableHead>
             <TableHead className="text-right">Tokens</TableHead>
+            {showCost ? <TableHead className="text-right">Cost</TableHead> : null}
             <TableHead className="text-right">Latency</TableHead>
             <TableHead className="w-[56px]" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {events.map((event) => (
-            <TableRow key={event.id}>
-              <TableCell className="whitespace-nowrap text-muted-foreground">
-                {formatTime(event.timestampMs, locale)}
-              </TableCell>
-              <TableCell>
-                <Badge
-                  variant={event.failed ? 'destructive' : 'success'}
-                  className="whitespace-nowrap rounded-full"
-                >
-                  {event.failed ? `HTTP ${event.failStatusCode || 500}` : 'OK'}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <div className="max-w-[260px]">
-                  <div className="truncate font-medium">{event.provider}</div>
-                  <div className="truncate text-xs text-muted-foreground">{event.alias || event.model}</div>
-                </div>
-              </TableCell>
-              <TableCell>
-                <span className="block max-w-[180px] truncate font-mono text-xs text-muted-foreground">
-                  {event.endpoint}
-                </span>
-              </TableCell>
-              <TableCell className="text-right font-mono">
-                {formatCompactNumber(event.tokens.totalTokens)}
-              </TableCell>
-              <TableCell className="text-right font-mono">{formatDuration(event.latencyMs)}</TableCell>
-              <TableCell>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disabled={!event.requestId}
-                  onClick={() => onDownload(event)}
-                  aria-label="Download request log"
-                >
-                  <Download className="size-4" />
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
+          {events.map((event) => {
+            const cost = prices ? estimateEventCost(event, prices) : null;
+            return (
+              <TableRow key={event.id}>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {formatTime(event.timestampMs, locale)}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant={event.failed ? 'destructive' : 'success'}
+                    className="whitespace-nowrap rounded-full"
+                  >
+                    {event.failed ? `HTTP ${event.failStatusCode || 500}` : 'OK'}
+                  </Badge>
+                  {showFailBody && event.failed && event.failBody ? (
+                    <div className="mt-1 max-w-[220px] truncate text-[11px] text-destructive/80">
+                      {event.failBody}
+                    </div>
+                  ) : null}
+                </TableCell>
+                <TableCell>
+                  <div className="max-w-[260px]">
+                    <div className="truncate font-medium">{event.provider}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {event.alias || event.model}
+                    </div>
+                    {event.authIndex ? (
+                      <div className="truncate text-[11px] text-muted-foreground/80">
+                        {event.authIndex}
+                      </div>
+                    ) : null}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <span className="block max-w-[120px] truncate font-mono text-xs text-muted-foreground">
+                    {event.apiKey || '-'}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <span className="block max-w-[180px] truncate font-mono text-xs text-muted-foreground">
+                    {event.endpoint}
+                  </span>
+                </TableCell>
+                <TableCell className="text-right font-mono">
+                  {formatCompactNumber(event.tokens.totalTokens)}
+                </TableCell>
+                {showCost ? (
+                  <TableCell className="text-right font-mono">
+                    {cost?.priced ? formatUsd(cost.totalCost) : '—'}
+                  </TableCell>
+                ) : null}
+                <TableCell className="text-right font-mono">
+                  {formatDuration(event.latencyMs)}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={!event.requestId}
+                    onClick={() => onDownload(event)}
+                    aria-label="Download request log"
+                  >
+                    <Download className="size-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </div>
@@ -680,7 +729,14 @@ export function UsageAnalyticsPage() {
   const config = useConfigStore((state) => state.config);
   const [range, setRange] = useLocalStorage<UsageTimeRange>('usageAnalytics.range', '1h');
   const [autoRefresh, setAutoRefresh] = useLocalStorage('usageAnalytics.autoRefresh', true);
+  const [viewMode, setViewMode] = useLocalStorage<UsageViewMode>('usageAnalytics.view', 'overview');
+  const [monitorStatus, setMonitorStatus] = useLocalStorage<'all' | 'success' | 'failed'>(
+    'usageAnalytics.monitorStatus',
+    'all'
+  );
+  const [monitorQuery, setMonitorQuery] = useState('');
   const [events, setEvents] = useState<UsageEvent[]>([]);
+  const [prices, setPrices] = useState<ModelPriceEntry[]>(DEFAULT_MODEL_PRICES);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
@@ -689,6 +745,7 @@ export function UsageAnalyticsPage() {
   const requestInFlightRef = useRef(false);
 
   const storageKey = useMemo(() => getUsageStorageKey(apiBase), [apiBase]);
+  const pricesStorageKey = useMemo(() => getModelPricesStorageKey(apiBase), [apiBase]);
   const usageStatisticsEnabled = config?.raw?.['usage-statistics-enabled'];
   const usageDisabled = usageStatisticsEnabled === false;
 
@@ -698,6 +755,7 @@ export function UsageAnalyticsPage() {
     window.queueMicrotask(() => {
       if (cancelled) return;
       setEvents(loadStoredUsageEvents(storageKey));
+      setPrices(loadModelPrices(pricesStorageKey));
       setLastLoadedAt(null);
       setError('');
       hydratedStorageKeyRef.current = storageKey;
@@ -706,7 +764,7 @@ export function UsageAnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [pricesStorageKey, storageKey]);
 
   useEffect(() => {
     if (!storageHydrated) return;
@@ -751,8 +809,17 @@ export function UsageAnalyticsPage() {
     autoRefresh && connectionStatus === 'connected' ? POLL_INTERVAL_MS : null
   );
 
-  const filteredEvents = useMemo(() => filterUsageEventsByRange(events, range), [events, range]);
+  const rangedEvents = useMemo(() => filterUsageEventsByRange(events, range), [events, range]);
+  const filteredEvents = useMemo(
+    () =>
+      filterUsageEvents(rangedEvents, {
+        status: viewMode === 'monitoring' ? monitorStatus : 'all',
+        query: viewMode === 'monitoring' ? monitorQuery : '',
+      }),
+    [monitorQuery, monitorStatus, rangedEvents, viewMode]
+  );
   const summary = useMemo(() => summarizeUsageEvents(filteredEvents), [filteredEvents]);
+  const costSummary = useMemo(() => summarizeUsageCost(filteredEvents, prices), [filteredEvents, prices]);
   const tokenSeries = useMemo(() => buildTokenSeries(filteredEvents, range), [filteredEvents, range]);
   const latencyRanking = useMemo(() => rankUsageLatency(filteredEvents), [filteredEvents]);
   const modelDistribution = useMemo(
@@ -767,9 +834,45 @@ export function UsageAnalyticsPage() {
     () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.endpoint), 8),
     [filteredEvents]
   );
+  const costByModel = useMemo(
+    () =>
+      groupUsageEventsWithCost(
+        filteredEvents,
+        prices,
+        (event) => compactLabel(event.alias || event.model),
+        12
+      ),
+    [filteredEvents, prices]
+  );
+  const costByProvider = useMemo(
+    () =>
+      groupUsageEventsWithCost(filteredEvents, prices, (event) => compactLabel(event.provider), 12),
+    [filteredEvents, prices]
+  );
+  const costByApiKey = useMemo(
+    () =>
+      groupUsageEventsWithCost(
+        filteredEvents,
+        prices,
+        (event) => compactLabel(event.apiKey || 'unknown-key'),
+        12
+      ),
+    [filteredEvents, prices]
+  );
+  const costByAccount = useMemo(
+    () =>
+      groupUsageEventsWithCost(
+        filteredEvents,
+        prices,
+        (event) => compactLabel(event.authIndex || event.apiKey || 'unknown'),
+        12
+      ),
+    [filteredEvents, prices]
+  );
   const failedEvents = useMemo(() => getFailedUsageEvents(filteredEvents), [filteredEvents]);
   const recentEvents = useMemo(
-    () => [...filteredEvents].sort((a, b) => b.timestampMs - a.timestampMs).slice(0, RECENT_REQUEST_LIMIT),
+    () =>
+      [...filteredEvents].sort((a, b) => b.timestampMs - a.timestampMs).slice(0, RECENT_REQUEST_LIMIT),
     [filteredEvents]
   );
   const disableControls = connectionStatus !== 'connected';
@@ -809,26 +912,72 @@ export function UsageAnalyticsPage() {
     }
   };
 
+  const exportJsonl = () => {
+    const payload = exportUsageEventsJsonl(filteredEvents);
+    if (!payload) {
+      showNotification(t('usage.empty_short', { defaultValue: '暂无数据' }), 'warning');
+      return;
+    }
+    downloadBlob({
+      filename: `usage-events-${range}.jsonl`,
+      blob: new Blob([payload], { type: 'application/x-ndjson' }),
+    });
+    showNotification(t('usage.export_success', { defaultValue: '已导出 JSONL' }), 'success');
+  };
+
+  const resetPrices = () => {
+    setPrices(DEFAULT_MODEL_PRICES);
+    localStorage.removeItem(pricesStorageKey);
+    showNotification(t('usage.prices_reset', { defaultValue: '已恢复默认模型价格' }), 'success');
+  };
+
   return (
     <div className="flex w-full flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-        <Badge variant={usageDisabled ? 'warning' : 'success'} className="rounded-full">
-          {usageDisabled
-            ? t('usage.capture_disabled', { defaultValue: '未启用' })
-            : t('usage.capture_ready', { defaultValue: '已就绪' })}
-        </Badge>
-        <span className="inline-flex items-center gap-1.5">
-          <Database className="size-4" />
-          {t('usage.cached_events', { defaultValue: '本地事件' })}: {formatCompactNumber(events.length)}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <Activity className="size-4" />
-          {t('usage.request_rate', { defaultValue: '请求速率' })}: {formatRate(summary.requests, range)}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <Server className="size-4" />
-          {t('usage.providers', { defaultValue: 'Provider' })}: {topProvider}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <Badge variant={usageDisabled ? 'warning' : 'success'} className="rounded-full">
+            {usageDisabled
+              ? t('usage.capture_disabled', { defaultValue: '未启用' })
+              : t('usage.capture_ready', { defaultValue: '已就绪' })}
+          </Badge>
+          <span className="inline-flex items-center gap-1.5">
+            <Database className="size-4" />
+            {t('usage.cached_events', { defaultValue: '本地事件' })}:{' '}
+            {formatCompactNumber(events.length)}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Activity className="size-4" />
+            {t('usage.request_rate', { defaultValue: '请求速率' })}:{' '}
+            {formatRate(summary.requests, range)}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Server className="size-4" />
+            {t('usage.providers', { defaultValue: 'Provider' })}: {topProvider}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <DollarSign className="size-4" />
+            {t('usage.est_cost', { defaultValue: '估算成本' })}: {formatUsd(costSummary.totalCost)}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as UsageViewMode)}>
+            <TabsList>
+              <TabsTrigger value="overview" className="px-3">
+                {t('usage.view_overview', { defaultValue: '总览' })}
+              </TabsTrigger>
+              <TabsTrigger value="monitoring" className="px-3">
+                {t('usage.view_monitoring', { defaultValue: '监控' })}
+              </TabsTrigger>
+              <TabsTrigger value="cost" className="px-3">
+                {t('usage.view_cost', { defaultValue: '成本' })}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <Button type="button" variant="outline" size="sm" onClick={exportJsonl} disabled={!filteredEvents.length}>
+            <Download className="size-4" />
+            {t('usage.export_jsonl', { defaultValue: '导出 JSONL' })}
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -837,7 +986,7 @@ export function UsageAnalyticsPage() {
         </div>
       )}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard
           title={t('usage.total_requests', { defaultValue: '请求数' })}
           value={formatCompactNumber(summary.requests)}
@@ -871,21 +1020,43 @@ export function UsageAnalyticsPage() {
           badge={latencyRanking[0] ? formatDuration(latencyRanking[0].maxLatencyMs) : '0ms'}
           icon={<Clock className="size-5" />}
         />
+        <MetricCard
+          title={t('usage.est_cost', { defaultValue: '估算成本' })}
+          value={formatUsd(costSummary.totalCost)}
+          subtitle={t('usage.cost_priced_ratio', {
+            defaultValue: '已定价 {{priced}} / 未定价 {{unpriced}}',
+            priced: costSummary.pricedRequests,
+            unpriced: costSummary.unpricedRequests,
+          })}
+          badge={formatUsd(costSummary.inputCost + costSummary.outputCost)}
+          icon={<DollarSign className="size-5" />}
+          tone="success"
+        />
       </section>
 
       <Card className="rounded-xl">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>{t('usage.token_curve', { defaultValue: 'Token 曲线' })}</CardTitle>
+            <CardTitle>
+              {viewMode === 'monitoring'
+                ? t('usage.view_monitoring', { defaultValue: '监控' })
+                : viewMode === 'cost'
+                  ? t('usage.view_cost', { defaultValue: '成本' })
+                  : t('usage.token_curve', { defaultValue: 'Token 曲线' })}
+            </CardTitle>
             <CardDescription>
-              {t('usage.token_curve_subtitle', { defaultValue: 'Input / Output / Reasoning 聚合' })}
+              {viewMode === 'monitoring'
+                ? t('usage.monitoring_subtitle', {
+                    defaultValue: '实时请求流：按状态 / 关键词筛选，支持失败摘要',
+                  })
+                : viewMode === 'cost'
+                  ? t('usage.cost_subtitle', {
+                      defaultValue: '基于本地模型价格表估算，不等于提供商账单',
+                    })
+                  : t('usage.token_curve_subtitle', {
+                      defaultValue: 'Input / Output / Reasoning 聚合',
+                    })}
             </CardDescription>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-slate-900" />Total</span>
-            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-blue-600" />Input</span>
-            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-emerald-500" />Output</span>
-            <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-full bg-violet-500" />Reasoning</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Tabs value={range} onValueChange={(value) => setRange(value as UsageTimeRange)}>
@@ -930,84 +1101,317 @@ export function UsageAnalyticsPage() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
-          <TokenAreaChart data={tokenSeries} />
-        </CardContent>
+        {viewMode !== 'monitoring' ? (
+          <CardContent>
+            <TokenAreaChart data={tokenSeries} />
+          </CardContent>
+        ) : null}
       </Card>
 
-      <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      {viewMode === 'monitoring' ? (
         <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle>{t('usage.model_distribution', { defaultValue: '模型调用分布' })}</CardTitle>
-            <CardDescription>按本地队列中的请求量聚合模型调用。</CardDescription>
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <Filter className="size-4 text-muted-foreground" />
+              <CardTitle className="text-base">
+                {t('usage.filters', { defaultValue: '筛选' })}
+              </CardTitle>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Tabs
+                value={monitorStatus}
+                onValueChange={(value) => setMonitorStatus(value as 'all' | 'success' | 'failed')}
+              >
+                <TabsList>
+                  <TabsTrigger value="all" className="px-3">
+                    {t('usage.filter_all', { defaultValue: '全部' })}
+                  </TabsTrigger>
+                  <TabsTrigger value="success" className="px-3">
+                    {t('usage.filter_success', { defaultValue: '成功' })}
+                  </TabsTrigger>
+                  <TabsTrigger value="failed" className="px-3">
+                    {t('usage.filter_failed', { defaultValue: '失败' })}
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <input
+                className="h-9 min-w-[220px] rounded-md border border-border bg-background px-3 text-sm"
+                value={monitorQuery}
+                onChange={(e) => setMonitorQuery(e.target.value)}
+                placeholder={t('usage.filter_query_placeholder', {
+                  defaultValue: '模型 / 账号 / API Key / 状态码…',
+                })}
+              />
+            </div>
           </CardHeader>
           <CardContent>
-            <DistributionBars groups={modelDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
+            <RecentEventsTable
+              events={recentEvents}
+              locale={i18n.language}
+              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+              onDownload={downloadRequestLog}
+              prices={prices}
+              showCost
+              showFailBody
+            />
           </CardContent>
         </Card>
+      ) : null}
 
-        <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle>{t('usage.latency_ranking', { defaultValue: '延迟排行' })}</CardTitle>
-            <CardDescription>按 Provider 与模型聚合平均延迟。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <LatencyList groups={latencyRanking} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
-          </CardContent>
-        </Card>
-      </section>
+      {viewMode === 'overview' ? (
+        <>
+          <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>
+                  {t('usage.model_distribution', { defaultValue: '模型调用分布' })}
+                </CardTitle>
+                <CardDescription>按本地队列中的请求量聚合模型调用。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DistributionBars
+                  groups={modelDistribution}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle>{t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}</CardTitle>
-            <CardDescription>按上游 Provider 聚合请求。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DistributionBars groups={providerDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
-          </CardContent>
-        </Card>
-        <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle>{t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}</CardTitle>
-            <CardDescription>按 API Endpoint 聚合请求。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DistributionBars groups={endpointDistribution} emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })} />
-          </CardContent>
-        </Card>
-      </section>
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>{t('usage.latency_ranking', { defaultValue: '延迟排行' })}</CardTitle>
+                <CardDescription>按 Provider 与模型聚合平均延迟。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LatencyList
+                  groups={latencyRanking}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+          </section>
 
-      <Card className="rounded-xl">
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <CardTitle>{t('usage.recent_requests', { defaultValue: '最近请求' })}</CardTitle>
-            <CardDescription>
-              {lastLoadedAt
-                ? t('usage.last_loaded', {
-                    defaultValue: '最近 {{time}}',
-                    time: formatTime(lastLoadedAt, i18n.language),
-                  })
-                : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
-            </CardDescription>
-          </div>
-          <Badge variant={failedEvents.length > 0 ? 'warning' : 'success'} className="w-fit rounded-full">
-            {failedEvents.length > 0 ? (
-              <span className="inline-flex items-center gap-1.5"><AlertTriangle className="size-3.5" />{failedEvents.length} failed</span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="size-3.5" />No failures</span>
-            )}
-          </Badge>
-        </CardHeader>
-        <CardContent>
-          <RecentEventsTable
-            events={recentEvents}
-            locale={i18n.language}
-            emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            onDownload={downloadRequestLog}
-          />
-        </CardContent>
-      </Card>
+          <section className="grid gap-4 lg:grid-cols-2">
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>
+                  {t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}
+                </CardTitle>
+                <CardDescription>按上游 Provider 聚合请求。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DistributionBars
+                  groups={providerDistribution}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>
+                  {t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}
+                </CardTitle>
+                <CardDescription>按 API Endpoint 聚合请求。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DistributionBars
+                  groups={endpointDistribution}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+          </section>
+
+          <Card className="rounded-xl">
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle>
+                  {t('usage.recent_requests', { defaultValue: '最近请求' })}
+                </CardTitle>
+                <CardDescription>
+                  {lastLoadedAt
+                    ? t('usage.last_loaded', {
+                        defaultValue: '最近 {{time}}',
+                        time: formatTime(lastLoadedAt, i18n.language),
+                      })
+                    : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
+                </CardDescription>
+              </div>
+              <Badge
+                variant={failedEvents.length > 0 ? 'warning' : 'success'}
+                className="w-fit rounded-full"
+              >
+                {failedEvents.length > 0 ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <AlertTriangle className="size-3.5" />
+                    {failedEvents.length} failed
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5" />
+                    No failures
+                  </span>
+                )}
+              </Badge>
+            </CardHeader>
+            <CardContent>
+              <RecentEventsTable
+                events={recentEvents}
+                locale={i18n.language}
+                emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                onDownload={downloadRequestLog}
+                prices={prices}
+                showCost
+              />
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+
+      {viewMode === 'cost' ? (
+        <>
+          <section className="grid gap-4 lg:grid-cols-2">
+            <Card className="rounded-xl">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>{t('usage.cost_by_model', { defaultValue: '模型成本排行' })}</CardTitle>
+                  <CardDescription>
+                    {t('usage.cost_by_model_desc', { defaultValue: '按估算费用排序' })}
+                  </CardDescription>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={resetPrices}>
+                  {t('usage.reset_prices', { defaultValue: '重置价格' })}
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <CostRankTable
+                  groups={costByModel}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>
+                  {t('usage.cost_by_provider', { defaultValue: 'Provider 成本' })}
+                </CardTitle>
+                <CardDescription>
+                  {t('usage.cost_by_provider_desc', { defaultValue: '按上游提供商拆解' })}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CostRankTable
+                  groups={costByProvider}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>{t('usage.cost_by_key', { defaultValue: 'API Key 成本' })}</CardTitle>
+                <CardDescription>
+                  {t('usage.cost_by_key_desc', { defaultValue: '定位高消耗调用方' })}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CostRankTable
+                  groups={costByApiKey}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+            <Card className="rounded-xl">
+              <CardHeader>
+                <CardTitle>
+                  {t('usage.cost_by_account', { defaultValue: '账号 / Auth 成本' })}
+                </CardTitle>
+                <CardDescription>
+                  {t('usage.cost_by_account_desc', {
+                    defaultValue: '按 auth_index 或 API Key 拆解',
+                  })}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CostRankTable
+                  groups={costByAccount}
+                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                />
+              </CardContent>
+            </Card>
+          </section>
+          <Card className="rounded-xl">
+            <CardHeader>
+              <CardTitle>
+                {t('usage.cost_breakdown', { defaultValue: '成本构成' })}
+              </CardTitle>
+              <CardDescription>
+                Input {formatUsd(costSummary.inputCost)} · Output{' '}
+                {formatUsd(costSummary.outputCost)} · Reasoning{' '}
+                {formatUsd(costSummary.reasoningCost)} · Cache {formatUsd(costSummary.cacheCost)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RecentEventsTable
+                events={recentEvents}
+                locale={i18n.language}
+                emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
+                onDownload={downloadRequestLog}
+                prices={prices}
+                showCost
+              />
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function CostRankTable({
+  groups,
+  emptyText,
+}: {
+  groups: Array<{
+    label: string;
+    requests: number;
+    totalTokens: number;
+    cost: number;
+    failures: number;
+  }>;
+  emptyText: string;
+}) {
+  if (!groups.length) {
+    return <div className="py-8 text-center text-sm text-muted-foreground">{emptyText}</div>;
+  }
+  return (
+    <div className="overflow-hidden rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead className="text-right">Requests</TableHead>
+            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Fail</TableHead>
+            <TableHead className="text-right">Cost</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {groups.map((group) => (
+            <TableRow key={group.label}>
+              <TableCell className="max-w-[220px] truncate font-medium">{group.label}</TableCell>
+              <TableCell className="text-right font-mono">
+                {formatCompactNumber(group.requests)}
+              </TableCell>
+              <TableCell className="text-right font-mono">
+                {formatCompactNumber(group.totalTokens)}
+              </TableCell>
+              <TableCell className="text-right font-mono">
+                {formatCompactNumber(group.failures)}
+              </TableCell>
+              <TableCell className="text-right font-mono">{formatUsd(group.cost)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   );
 }

@@ -16,8 +16,10 @@ import {
   claudeToResource,
   codexToResource,
   geminiToResource,
+  interactionsToResource,
   openaiToResource,
   vertexToResource,
+  xaiToResource,
 } from './adapters';
 import { PROVIDER_BRAND_ORDER, PROVIDER_PATHS } from './descriptors';
 import type {
@@ -90,20 +92,25 @@ const buildExcludedModels = (
   return filtered.length ? filtered : undefined;
 };
 
-const buildProviderKeyConfig = (
-  brand: 'gemini' | 'codex' | 'claude' | 'vertex',
-  input: ProviderEntryFormInput,
-  existing?: ProviderKeyConfig | GeminiKeyConfig | null
-): ProviderKeyConfig | GeminiKeyConfig => {
-  const headers = headersFromEntries(input.headers);
-  const models = input.models
+const buildModelEntries = (input: ProviderEntryFormInput) =>
+  input.models
     .map((m) => ({
       name: m.name.trim(),
       alias: m.alias?.trim() || undefined,
+      displayName: m.displayName?.trim() || undefined,
+      forceMapping: m.forceMapping || undefined,
       priority: m.priority,
       testModel: m.testModel,
     }))
     .filter((m) => m.name);
+
+const buildProviderKeyConfig = (
+  brand: 'gemini' | 'interactions' | 'codex' | 'xai' | 'claude' | 'vertex',
+  input: ProviderEntryFormInput,
+  existing?: ProviderKeyConfig | GeminiKeyConfig | null
+): ProviderKeyConfig | GeminiKeyConfig => {
+  const headers = headersFromEntries(input.headers);
+  const models = buildModelEntries(input);
   const excluded = buildExcludedModels(input.excludedModelsText, input.disabled, brand);
   const apiKeyChanged = input.apiKey.trim().length > 0;
   const next: ProviderKeyConfig = {
@@ -117,7 +124,7 @@ const buildProviderKeyConfig = (
     excludedModels: excluded,
     authIndex: existing?.authIndex,
   };
-  if (brand === 'codex' && input.websockets !== undefined) {
+  if ((brand === 'codex' || brand === 'xai') && input.websockets !== undefined) {
     next.websockets = input.websockets;
   }
   if (brand === 'claude' && input.cloak) {
@@ -135,14 +142,7 @@ const buildOpenAIConfig = (
   existing?: OpenAIProviderConfig | null
 ): OpenAIProviderConfig => {
   const headers = headersFromEntries(input.headers);
-  const models = input.models
-    .map((m) => ({
-      name: m.name.trim(),
-      alias: m.alias?.trim() || undefined,
-      priority: m.priority,
-      testModel: m.testModel,
-    }))
-    .filter((m) => m.name);
+  const models = buildModelEntries(input);
   const apiKeyEntries =
     input.apiKeyEntries
       ?.map((entry, index) => {
@@ -196,12 +196,14 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
     setIsFetching(true);
     setErrorMessage(null);
     try {
-      const [configResult, vertexResult, ampcodeResult, openaiResult] = await Promise.allSettled([
-        fetchConfig(undefined, true),
-        providersApi.getVertexConfigs(),
-        ampcodeApi.getAmpcode(),
-        providersApi.getOpenAIProviders(),
-      ]);
+      const [configResult, vertexResult, xaiResult, interactionsResult, openaiResult] =
+        await Promise.allSettled([
+          fetchConfig(undefined, true),
+          providersApi.getVertexConfigs(),
+          providersApi.getXAIConfigs(),
+          providersApi.getInteractionsKeys(),
+          providersApi.getOpenAIProviders(),
+        ]);
       if (configResult.status !== 'fulfilled') {
         throw configResult.reason;
       }
@@ -209,9 +211,13 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
         updateConfigValue('vertex-api-key', vertexResult.value || []);
         clearCache('vertex-api-key');
       }
-      if (ampcodeResult.status === 'fulfilled') {
-        updateConfigValue('ampcode', ampcodeResult.value);
-        clearCache('ampcode');
+      if (xaiResult.status === 'fulfilled') {
+        updateConfigValue('xai-api-key', xaiResult.value || []);
+        clearCache('xai-api-key');
+      }
+      if (interactionsResult.status === 'fulfilled') {
+        updateConfigValue('interactions-api-key', interactionsResult.value || []);
+        clearCache('interactions-api-key');
       }
       if (openaiResult.status === 'fulfilled') {
         updateConfigValue('openai-compatibility', openaiResult.value || []);
@@ -247,8 +253,14 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
         case 'gemini':
           resources = (config.geminiApiKeys ?? []).map((c, i) => geminiToResource(c, i));
           break;
+        case 'interactions':
+          resources = (config.interactionsApiKeys ?? []).map((c, i) => interactionsToResource(c, i));
+          break;
         case 'codex':
           resources = (config.codexApiKeys ?? []).map((c, i) => codexToResource(c, i));
+          break;
+        case 'xai':
+          resources = (config.xaiApiKeys ?? []).map((c, i) => xaiToResource(c, i));
           break;
         case 'claude':
           resources = (config.claudeApiKeys ?? []).map((c, i) => claudeToResource(c, i));
@@ -315,6 +327,24 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
     [clearCache, updateConfigValue]
   );
 
+  const persistXAIConfigs = useCallback(
+    async (next: ProviderKeyConfig[]) => {
+      await providersApi.saveXAIConfigs(next);
+      updateConfigValue('xai-api-key', next);
+      clearCache('xai-api-key');
+    },
+    [clearCache, updateConfigValue]
+  );
+
+  const persistInteractionsKeys = useCallback(
+    async (next: GeminiKeyConfig[]) => {
+      await providersApi.saveInteractionsKeys(next);
+      updateConfigValue('interactions-api-key', next);
+      clearCache('interactions-api-key');
+    },
+    [clearCache, updateConfigValue]
+  );
+
   const persistOpenAIConfigs = useCallback(
     async (next: OpenAIProviderConfig[]) => {
       await providersApi.saveOpenAIProviders(next);
@@ -332,10 +362,18 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           const next = [...(config?.geminiApiKeys ?? [])];
           next.push(buildProviderKeyConfig('gemini', input) as GeminiKeyConfig);
           await persistGeminiKeys(next);
+        } else if (brand === 'interactions') {
+          const next = [...(config?.interactionsApiKeys ?? [])];
+          next.push(buildProviderKeyConfig('interactions', input) as GeminiKeyConfig);
+          await persistInteractionsKeys(next);
         } else if (brand === 'codex') {
           const next = [...(config?.codexApiKeys ?? [])];
           next.push(buildProviderKeyConfig('codex', input) as ProviderKeyConfig);
           await persistCodexConfigs(next);
+        } else if (brand === 'xai') {
+          const next = [...(config?.xaiApiKeys ?? [])];
+          next.push(buildProviderKeyConfig('xai', input) as ProviderKeyConfig);
+          await persistXAIConfigs(next);
         } else if (brand === 'claude') {
           const next = [...(config?.claudeApiKeys ?? [])];
           next.push(buildProviderKeyConfig('claude', input) as ProviderKeyConfig);
@@ -349,7 +387,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           next.push(buildOpenAIConfig(input));
           await persistOpenAIConfigs(next);
         } else if (brand === 'ampcode') {
-          throw new Error('Use saveAmpcode for ampcode create/update');
+          throw new Error('Ampcode has been removed from CLIProxyAPI');
         }
         refreshSnapshot();
       } finally {
@@ -361,8 +399,10 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
       persistClaudeConfigs,
       persistCodexConfigs,
       persistGeminiKeys,
+      persistInteractionsKeys,
       persistOpenAIConfigs,
       persistVertexConfigs,
+      persistXAIConfigs,
       refreshSnapshot,
     ]
   );
@@ -378,11 +418,21 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           const existing = list[idx];
           list[idx] = buildProviderKeyConfig('gemini', input, existing) as GeminiKeyConfig;
           await persistGeminiKeys(list);
+        } else if (brand === 'interactions') {
+          const list = [...(config?.interactionsApiKeys ?? [])];
+          const existing = list[idx];
+          list[idx] = buildProviderKeyConfig('interactions', input, existing) as GeminiKeyConfig;
+          await persistInteractionsKeys(list);
         } else if (brand === 'codex') {
           const list = [...(config?.codexApiKeys ?? [])];
           const existing = list[idx];
           list[idx] = buildProviderKeyConfig('codex', input, existing) as ProviderKeyConfig;
           await persistCodexConfigs(list);
+        } else if (brand === 'xai') {
+          const list = [...(config?.xaiApiKeys ?? [])];
+          const existing = list[idx];
+          list[idx] = buildProviderKeyConfig('xai', input, existing) as ProviderKeyConfig;
+          await persistXAIConfigs(list);
         } else if (brand === 'claude') {
           const list = [...(config?.claudeApiKeys ?? [])];
           const existing = list[idx];
@@ -399,7 +449,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           list[idx] = buildOpenAIConfig(input, existing);
           await persistOpenAIConfigs(list);
         } else if (brand === 'ampcode') {
-          throw new Error('Use saveAmpcode for ampcode update');
+          throw new Error('Ampcode has been removed from CLIProxyAPI');
         }
         refreshSnapshot();
       } finally {
@@ -411,8 +461,10 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
       persistClaudeConfigs,
       persistCodexConfigs,
       persistGeminiKeys,
+      persistInteractionsKeys,
       persistOpenAIConfigs,
       persistVertexConfigs,
+      persistXAIConfigs,
       refreshSnapshot,
     ]
   );
@@ -427,11 +479,21 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           const next = (config?.geminiApiKeys ?? []).filter((_, i) => i !== sel.index);
           updateConfigValue('gemini-api-key', next);
           clearCache('gemini-api-key');
+        } else if (sel.brand === 'interactions') {
+          await providersApi.deleteInteractionsKey(sel.apiKey, sel.baseUrl);
+          const next = (config?.interactionsApiKeys ?? []).filter((_, i) => i !== sel.index);
+          updateConfigValue('interactions-api-key', next);
+          clearCache('interactions-api-key');
         } else if (sel.brand === 'codex') {
           await providersApi.deleteCodexConfig(sel.apiKey, sel.baseUrl);
           const next = (config?.codexApiKeys ?? []).filter((_, i) => i !== sel.index);
           updateConfigValue('codex-api-key', next);
           clearCache('codex-api-key');
+        } else if (sel.brand === 'xai') {
+          await providersApi.deleteXAIConfig(sel.apiKey, sel.baseUrl);
+          const next = (config?.xaiApiKeys ?? []).filter((_, i) => i !== sel.index);
+          updateConfigValue('xai-api-key', next);
+          clearCache('xai-api-key');
         } else if (sel.brand === 'claude') {
           await providersApi.deleteClaudeConfig(sel.apiKey, sel.baseUrl);
           const next = (config?.claudeApiKeys ?? []).filter((_, i) => i !== sel.index);
@@ -448,13 +510,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
           updateConfigValue('openai-compatibility', next);
           clearCache('openai-compatibility');
         } else if (sel.brand === 'ampcode') {
-          await Promise.allSettled([
-            ampcodeApi.clearUpstreamUrl(),
-            ampcodeApi.clearUpstreamApiKey(),
-            ampcodeApi.clearModelMappings(),
-          ]);
-          updateConfigValue('ampcode', {});
-          clearCache('ampcode');
+          throw new Error('Ampcode has been removed from CLIProxyAPI');
         }
         refreshSnapshot();
       } finally {
@@ -470,22 +526,34 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
       try {
         const brand = resource.brand;
         const idx = resource.originalIndex;
-        if (brand === 'gemini') {
-          const list = [...(config?.geminiApiKeys ?? [])];
+        if (brand === 'gemini' || brand === 'interactions') {
+          const list = [
+            ...((brand === 'gemini'
+              ? config?.geminiApiKeys
+              : config?.interactionsApiKeys) ?? []),
+          ];
           const current = list[idx];
           if (!current) return;
           const excluded = disabled
             ? withDisableAllModelsRule(current.excludedModels)
             : withoutDisableAllModelsRule(current.excludedModels);
           list[idx] = { ...current, excludedModels: excluded };
-          await persistGeminiKeys(list);
-        } else if (brand === 'codex' || brand === 'claude' || brand === 'vertex') {
+          if (brand === 'gemini') await persistGeminiKeys(list);
+          else await persistInteractionsKeys(list);
+        } else if (
+          brand === 'codex' ||
+          brand === 'xai' ||
+          brand === 'claude' ||
+          brand === 'vertex'
+        ) {
           const key =
             brand === 'codex'
               ? 'codexApiKeys'
-              : brand === 'claude'
-                ? 'claudeApiKeys'
-                : 'vertexApiKeys';
+              : brand === 'xai'
+                ? 'xaiApiKeys'
+                : brand === 'claude'
+                  ? 'claudeApiKeys'
+                  : 'vertexApiKeys';
           const list = [...((config?.[key] as ProviderKeyConfig[] | undefined) ?? [])];
           const current = list[idx];
           if (!current) return;
@@ -494,6 +562,7 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             : withoutDisableAllModelsRule(current.excludedModels);
           list[idx] = { ...current, excludedModels: excluded };
           if (brand === 'codex') await persistCodexConfigs(list);
+          else if (brand === 'xai') await persistXAIConfigs(list);
           else if (brand === 'claude') await persistClaudeConfigs(list);
           else await persistVertexConfigs(list);
         } else if (brand === 'openaiCompatibility') {
@@ -505,8 +574,6 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
             updateConfigValue('openai-compatibility', list);
             clearCache('openai-compatibility');
           }
-        } else if (brand === 'ampcode') {
-          /* ampcode toggle 不支持,跳过 */
         }
         refreshSnapshot();
       } finally {
@@ -519,7 +586,9 @@ export function useProviderWorkbench(): UseProviderWorkbenchResult {
       persistClaudeConfigs,
       persistCodexConfigs,
       persistGeminiKeys,
+      persistInteractionsKeys,
       persistVertexConfigs,
+      persistXAIConfigs,
       refreshSnapshot,
       updateConfigValue,
     ]

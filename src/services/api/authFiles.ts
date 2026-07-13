@@ -326,12 +326,17 @@ const normalizeOauthModelAlias = (payload: unknown): Record<string, OAuthModelAl
 	        const alias = String(entry.alias ?? '').trim();
 	        if (!name || !alias) return null;
 	        const fork = entry.fork === true;
-	        return fork ? { name, alias, fork } : { name, alias };
+	        const forceMappingValue = entry['force-mapping'] ?? entry.forceMapping;
+	        const forceMapping = forceMappingValue === true;
+	        const result: OAuthModelAliasEntry = { name, alias };
+	        if (fork) result.fork = true;
+	        if (forceMapping) result.forceMapping = true;
+	        return result;
 	      })
       .filter(Boolean)
       .filter((entry) => {
         const aliasEntry = entry as OAuthModelAliasEntry;
-        const dedupeKey = `${aliasEntry.name.toLowerCase()}::${aliasEntry.alias.toLowerCase()}::${aliasEntry.fork ? '1' : '0'}`;
+        const dedupeKey = `${aliasEntry.name.toLowerCase()}::${aliasEntry.alias.toLowerCase()}::${aliasEntry.fork ? '1' : '0'}::${aliasEntry.forceMapping ? '1' : '0'}`;
         if (seen.has(dedupeKey)) return false;
         seen.add(dedupeKey);
         return true;
@@ -431,8 +436,23 @@ export const authFilesApi = {
     const normalizedChannel = String(channel ?? '')
       .trim()
       .toLowerCase();
-    const normalizedAliases = normalizeOauthModelAlias({ [normalizedChannel]: aliases })[normalizedChannel] ?? [];
-    await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, { channel: normalizedChannel, aliases: normalizedAliases });
+    const normalizedAliases =
+      normalizeOauthModelAlias({ [normalizedChannel]: aliases })[normalizedChannel] ?? [];
+    const serialized = normalizedAliases.map((entry) => {
+      const payload: Record<string, unknown> = {
+        name: entry.name,
+        alias: entry.alias,
+      };
+      if (entry.fork) payload.fork = true;
+      if (typeof entry.forceMapping === 'boolean') {
+        payload['force-mapping'] = entry.forceMapping;
+      }
+      return payload;
+    });
+    await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, {
+      channel: normalizedChannel,
+      aliases: serialized,
+    });
   },
 
   deleteOauthModelAlias: async (channel: string) => {

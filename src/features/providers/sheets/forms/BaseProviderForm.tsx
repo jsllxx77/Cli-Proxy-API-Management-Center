@@ -73,7 +73,7 @@ function buildInitialForm(
       models: [emptyModel()],
       headers: [emptyHeader()],
       excludedModelsText: '',
-      websockets: brand === 'codex' ? false : undefined,
+      websockets: brand === 'codex' || brand === 'xai' ? false : undefined,
       cloak:
         brand === 'claude' ? { mode: '', strictMode: false, sensitiveWordsText: '' } : undefined,
       testModel: brand === 'openaiCompatibility' || brand === 'claude' ? '' : undefined,
@@ -96,6 +96,8 @@ function buildInitialForm(
         ? cfg.models.map((m) => ({
             name: m.name,
             alias: m.alias ?? '',
+            displayName: m.displayName ?? '',
+            forceMapping: m.forceMapping === true,
             priority: m.priority,
             testModel: m.testModel,
           }))
@@ -135,6 +137,8 @@ function buildInitialForm(
       ? cfg.models.map((m) => ({
           name: m.name,
           alias: m.alias ?? '',
+          displayName: m.displayName ?? '',
+          forceMapping: m.forceMapping === true,
           priority: m.priority,
           testModel: m.testModel,
         }))
@@ -143,7 +147,10 @@ function buildInitialForm(
       ? Object.entries(cfg.headers).map(([k, v]) => ({ key: k, value: String(v) }))
       : [emptyHeader()],
     excludedModelsText: excludedList.join('\n'),
-    websockets: brand === 'codex' ? (cfg as ProviderKeyConfig).websockets === true : undefined,
+    websockets:
+      brand === 'codex' || brand === 'xai'
+        ? (cfg as ProviderKeyConfig).websockets === true
+        : undefined,
     cloak:
       brand === 'claude'
         ? {
@@ -902,47 +909,91 @@ export function BaseProviderForm({
               />
             ) : null}
             {modelsList.map((entry, idx) => (
-              <div
-                key={idx}
-                style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}
-              >
-                <input
-                  className={styles.input}
-                  placeholder="model-name"
-                  value={entry.name}
-                  onChange={(e) =>
-                    updateField(
-                      'models',
-                      modelsList.map((it, i) => (i === idx ? { ...it, name: e.target.value } : it))
-                    )
-                  }
-                  disabled={mutating}
-                />
-                <input
-                  className={styles.input}
-                  placeholder="alias (optional)"
-                  value={entry.alias ?? ''}
-                  onChange={(e) =>
-                    updateField(
-                      'models',
-                      modelsList.map((it, i) => (i === idx ? { ...it, alias: e.target.value } : it))
-                    )
-                  }
-                  disabled={mutating}
-                />
-                <button
-                  type="button"
-                  className={styles.removeBtn}
-                  disabled={mutating || modelsList.length <= 1}
-                  onClick={() =>
-                    updateField(
-                      'models',
-                      modelsList.filter((_, i) => i !== idx)
-                    )
-                  }
+              <div key={idx} className={styles.modelEntryCard}>
+                <div
+                  style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}
                 >
-                  <IconX size={12} />
-                </button>
+                  <input
+                    className={styles.input}
+                    placeholder="model-name"
+                    value={entry.name}
+                    onChange={(e) =>
+                      updateField(
+                        'models',
+                        modelsList.map((it, i) => (i === idx ? { ...it, name: e.target.value } : it))
+                      )
+                    }
+                    disabled={mutating}
+                  />
+                  <input
+                    className={styles.input}
+                    placeholder="alias (optional)"
+                    value={entry.alias ?? ''}
+                    onChange={(e) =>
+                      updateField(
+                        'models',
+                        modelsList.map((it, i) =>
+                          i === idx ? { ...it, alias: e.target.value } : it
+                        )
+                      )
+                    }
+                    disabled={mutating}
+                  />
+                  <button
+                    type="button"
+                    className={styles.removeBtn}
+                    disabled={mutating || modelsList.length <= 1}
+                    onClick={() =>
+                      updateField(
+                        'models',
+                        modelsList.filter((_, i) => i !== idx)
+                      )
+                    }
+                  >
+                    <IconX size={12} />
+                  </button>
+                </div>
+                <div
+                  style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginTop: 8 }}
+                >
+                  <input
+                    className={styles.input}
+                    placeholder={t('providersPage.form.displayNamePlaceholder', {
+                      defaultValue: 'display-name (optional)',
+                    })}
+                    value={entry.displayName ?? ''}
+                    onChange={(e) =>
+                      updateField(
+                        'models',
+                        modelsList.map((it, i) =>
+                          i === idx ? { ...it, displayName: e.target.value } : it
+                        )
+                      )
+                    }
+                    disabled={mutating}
+                  />
+                  <label className={styles.checkboxRow} style={{ margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      className={styles.checkboxBox}
+                      checked={entry.forceMapping === true}
+                      disabled={mutating}
+                      onChange={(e) =>
+                        updateField(
+                          'models',
+                          modelsList.map((it, i) =>
+                            i === idx ? { ...it, forceMapping: e.target.checked } : it
+                          )
+                        )
+                      }
+                    />
+                    <span className={styles.checkboxText}>
+                      <span>
+                        {t('providersPage.form.forceMapping', { defaultValue: 'force-mapping' })}
+                      </span>
+                    </span>
+                  </label>
+                </div>
               </div>
             ))}
             <button

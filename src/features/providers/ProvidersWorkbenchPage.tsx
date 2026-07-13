@@ -347,7 +347,7 @@ export function ProvidersWorkbenchPage() {
     );
   }
 
-  const ampcodeBrandActive = activeBrand === 'ampcode';
+  const ampcodeBrandActive = false;
 
   return (
     <div className={styles.page}>

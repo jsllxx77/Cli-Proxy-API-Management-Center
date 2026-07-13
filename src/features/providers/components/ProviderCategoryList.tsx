@@ -3,6 +3,7 @@ import ampcodeLogo from '@/assets/icons/amp.svg';
 import claudeLogo from '@/assets/icons/claude.svg';
 import codexLogo from '@/assets/icons/codex.svg';
 import geminiLogo from '@/assets/icons/gemini.svg';
+import grokLogo from '@/assets/icons/grok.svg';
 import openaiLogo from '@/assets/icons/openai-light.svg';
 import vertexLogo from '@/assets/icons/vertex.svg';
 import { IconAlertTriangle } from '@/components/ui/icons';
@@ -11,8 +12,10 @@ import styles from './ProviderCategoryList.module.scss';
 
 const PROVIDER_LOGOS: Record<ProviderBrand, { src: string; invertOnDark?: boolean }> = {
   gemini: { src: geminiLogo },
+  interactions: { src: geminiLogo },
   claude: { src: claudeLogo },
   codex: { src: codexLogo },
+  xai: { src: grokLogo },
   vertex: { src: vertexLogo },
   openaiCompatibility: { src: openaiLogo, invertOnDark: true },
   ampcode: { src: ampcodeLogo },
