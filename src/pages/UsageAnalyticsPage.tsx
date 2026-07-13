@@ -774,10 +774,10 @@ export function UsageAnalyticsPage() {
   const usageDisabled = usageStatisticsEnabled === false;
 
   /**
-   * One Keeper endpoint per view — no parallel fan-out, no client re-aggregation.
-   * overview → /usage/overview
-   * cost     → /usage/analysis
-   * monitoring → /usage/events
+   * Keeper-native loads (no client re-aggregation):
+   * overview  → overview + analysis（analysis 提供 latency_diagnostics P95）
+   * cost      → analysis
+   * monitoring → events
    */
   const loadKeeperData = useCallback(async () => {
     if (connectionStatus !== 'connected') return;
@@ -787,12 +787,40 @@ export function UsageAnalyticsPage() {
     setLoading(true);
     try {
       if (viewMode === 'overview') {
-        const overview = await usageApi.getKeeperOverview(range);
+        // overview 本身没有延迟字段；P95 在 analysis.latency_diagnostics
+        const [overviewResult, analysisResult] = await Promise.allSettled([
+          usageApi.getKeeperOverview(range),
+          usageApi.getKeeperAnalysis(range),
+        ]);
+
+        if (overviewResult.status !== 'fulfilled') {
+          throw overviewResult.reason;
+        }
+
+        const overview = overviewResult.value;
         setKeeperOnline(true);
-        setOverviewSummary(overviewToSummary(overview));
+        let summary = overviewToSummary(overview);
         setTokenSeries(overviewSeriesToTokenSeries(overview));
-        // Keeper overview series: short windows are hourly, multi-day are daily
         setSeriesGranularity(range === '7d' || range === '30d' ? 'daily' : 'hourly');
+
+        if (analysisResult.status === 'fulfilled') {
+          const analysis = analysisResult.value;
+          const latency = latencyFromDiagnostics(analysis);
+          setLatencyDiag(latency);
+          summary = {
+            ...summary,
+            p95LatencyMs: latency.p95LatencyMs,
+            maxLatencyMs: latency.maxLatencyMs,
+          };
+          // analysis.token_usage 带 Input/Output/Reasoning，优先用于曲线
+          const analysisSeries = analysisTokenUsageToSeries(analysis);
+          if (analysisSeries.some((point) => point.totalTokens > 0 || point.requests > 0)) {
+            setTokenSeries(analysisSeries);
+            setSeriesGranularity(analysis.granularity || 'hourly');
+          }
+        }
+
+        setOverviewSummary(summary);
       } else if (viewMode === 'cost') {
         const analysis = await usageApi.getKeeperAnalysis(range);
         setKeeperOnline(true);
@@ -807,8 +835,8 @@ export function UsageAnalyticsPage() {
         setCostByProvider(costs.byProvider);
         setCostByApiKey(costs.byApiKey);
         setCostByAccount(costs.byAccount);
-        setLatencyDiag(latencyFromDiagnostics(analysis));
-        // cost totals from model composition sum when overview not loaded
+        const latency = latencyFromDiagnostics(analysis);
+        setLatencyDiag(latency);
         const totalCost = costs.byModel.reduce((s, m) => s + m.cost, 0);
         const totalReq = costs.byModel.reduce((s, m) => s + m.requests, 0);
         const totalTok = costs.byModel.reduce((s, m) => s + m.totalTokens, 0);
@@ -818,8 +846,8 @@ export function UsageAnalyticsPage() {
           tokens: { ...prev.tokens, totalTokens: totalTok || prev.tokens.totalTokens },
           totalCost: totalCost || prev.totalCost,
           costAvailable: costs.byModel.some((m) => m.cost > 0) || prev.costAvailable,
-          p95LatencyMs: latencyFromDiagnostics(analysis).p95LatencyMs,
-          maxLatencyMs: latencyFromDiagnostics(analysis).maxLatencyMs,
+          p95LatencyMs: latency.p95LatencyMs,
+          maxLatencyMs: latency.maxLatencyMs,
           granularityHint: distributions.granularity,
         }));
       } else {
@@ -1068,9 +1096,11 @@ export function UsageAnalyticsPage() {
           subtitle={
             latencyDiag.p95TtftMs > 0
               ? `TTFT P95 ${formatDuration(latencyDiag.p95TtftMs)}`
-              : t('usage.latency_from_analysis', {
-                  defaultValue: '来自 analysis.latency_diagnostics',
-                })
+              : latencyDiag.totalPoints > 0
+                ? `${latencyDiag.totalPoints} samples`
+                : t('usage.latency_from_analysis', {
+                    defaultValue: 'analysis.latency_diagnostics',
+                  })
           }
           badge={
             latencyDiag.maxLatencyMs > 0
@@ -1226,7 +1256,7 @@ export function UsageAnalyticsPage() {
           <CardContent className="text-sm text-muted-foreground">
             {t('usage.overview_note', {
               defaultValue:
-                '总览仅请求 /usage/overview。曲线为 Keeper 小时/天序列；模型构成与延迟诊断请切换到「成本」页（/usage/analysis）。请求明细请切换到「监控」页（/usage/events）。',
+                '总览：/usage/overview（汇总）+ /usage/analysis（P95 延迟与 Token 拆分）。模型成本构成见「成本」页；请求明细见「监控」页。',
             })}
           </CardContent>
         </Card>
