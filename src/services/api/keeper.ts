@@ -10,17 +10,28 @@ import { getErrorMessage, isRecord } from '@/utils/helpers';
 const KEEPER_BASE_STORAGE_KEY = 'cpamc.keeper.baseUrl';
 const KEEPER_ENABLED_STORAGE_KEY = 'cpamc.keeper.enabled';
 
+/**
+ * Same-origin path preferred: nginx gateway on CPA port proxies
+ * `/keeper/` → Keeper service. Avoids extra open ports / CORS issues.
+ */
 export const detectKeeperBaseUrl = (): string => {
-  if (typeof window === 'undefined') return 'http://127.0.0.1:18317';
-  const { protocol, hostname } = window.location;
-  // CORS proxy in front of Keeper (see /root/cpa-usage-keeper)
-  return `${protocol}//${hostname}:18317`;
+  if (typeof window === 'undefined') return 'http://127.0.0.1:8317/keeper';
+  const { protocol, host } = window.location;
+  // e.g. http://140.245.44.107:8317/keeper
+  return `${protocol}//${host}/keeper`;
 };
 
 export const getStoredKeeperBaseUrl = (): string => {
   try {
     const raw = localStorage.getItem(KEEPER_BASE_STORAGE_KEY);
-    if (raw && raw.trim()) return raw.trim().replace(/\/+$/, '');
+    if (raw && raw.trim()) {
+      const normalized = raw.trim().replace(/\/+$/, '');
+      // Migrate old :18317 direct URL to same-origin /keeper
+      if (/:18317\/?$/.test(normalized)) {
+        return detectKeeperBaseUrl();
+      }
+      return normalized;
+    }
   } catch {
     // ignore
   }

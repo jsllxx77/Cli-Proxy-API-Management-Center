@@ -977,7 +977,7 @@ export function UsageAnalyticsPage() {
             className="h-9 min-w-[280px] flex-1 rounded-md border border-border bg-background px-3 text-sm"
             value={keeperBaseInput}
             onChange={(e) => setKeeperBaseInput(e.target.value)}
-            placeholder="http://host:18317"
+            placeholder="http://host:8317/keeper"
           />
           <Button type="button" variant="outline" size="sm" onClick={applyKeeperBase}>
             {t('common.save', { defaultValue: '保存' })}
