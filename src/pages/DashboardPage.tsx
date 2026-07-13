@@ -37,8 +37,9 @@ import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
 import {
   emptyOverviewSummary,
-  overviewSeriesToTokenSeries,
+  keeperEventsToUsageEvents,
   overviewToSummary,
+  pickTokenSeries,
 } from '@/utils/keeperAdapters';
 import {
   formatCompactNumber,
@@ -437,8 +438,12 @@ export function DashboardPage() {
 
       setUsageLoading(true);
       try {
-        const overview = await usageApi.getKeeperOverview(tokenRange);
+        const [overview, eventsRes] = await Promise.all([
+          usageApi.getKeeperOverview(tokenRange),
+          usageApi.getKeeperEvents({ range: tokenRange, page: 1, page_size: 100 }),
+        ]);
         if (cancelled) return;
+        const mappedEvents = keeperEventsToUsageEvents(eventsRes.events);
         const summary = overviewToSummary(overview);
         setTokenSummary({
           requests: summary.requests,
@@ -449,7 +454,9 @@ export function DashboardPage() {
           avgTtftMs: summary.avgTtftMs,
           tokens: summary.tokens,
         });
-        setTokenSeries(trimTrailingEmptyTokenBuckets(overviewSeriesToTokenSeries(overview)));
+        setTokenSeries(
+          trimTrailingEmptyTokenBuckets(pickTokenSeries(overview, mappedEvents, tokenRange))
+        );
       } catch {
         if (!cancelled) {
           const empty = emptyOverviewSummary();

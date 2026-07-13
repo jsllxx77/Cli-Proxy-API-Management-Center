@@ -55,8 +55,8 @@ import {
   emptyOverviewSummary,
   keeperEventsToUsageEvents,
   latencyFromDiagnostics,
-  overviewSeriesToTokenSeries,
   overviewToSummary,
+  pickTokenSeries,
 } from '@/utils/keeperAdapters';
 import {
   exportUsageEventsJsonl,
@@ -326,13 +326,23 @@ function TokenAreaChart({ data }: { data: TokenSeriesPoint[] }) {
   const plotHeight = height - padding.top - padding.bottom;
   const bottom = padding.top + plotHeight;
   const maxValue = Math.max(...chartData.map((point) => point.total), 1);
+  // Single-point series still needs a horizontal segment so the chart isn't a lonely dot.
+  const plotCount = Math.max(chartData.length, 2);
   const xFor = (index: number) =>
-    padding.left + (plotWidth * index) / Math.max(1, chartData.length - 1);
+    padding.left + (plotWidth * index) / Math.max(1, plotCount - 1);
   const yFor = (value: number) => bottom - (Math.max(0, value) / maxValue) * plotHeight;
-  const linePoints = (key: 'total' | 'input' | 'output' | 'reasoning') =>
-    chartData.map((point, index) => `${xFor(index)},${yFor(point[key])}`).join(' ');
+  const linePoints = (key: 'total' | 'input' | 'output' | 'reasoning') => {
+    if (chartData.length === 1) {
+      const y = yFor(chartData[0][key]);
+      return `${padding.left},${y} ${padding.left + plotWidth},${y}`;
+    }
+    return chartData.map((point, index) => `${xFor(index)},${yFor(point[key])}`).join(' ');
+  };
   const totalPoints = linePoints('total');
-  const totalArea = `${padding.left},${bottom} ${totalPoints} ${padding.left + plotWidth},${bottom}`;
+  const totalArea =
+    chartData.length === 1
+      ? `${padding.left},${bottom} ${padding.left},${yFor(chartData[0].total)} ${padding.left + plotWidth},${yFor(chartData[0].total)} ${padding.left + plotWidth},${bottom}`
+      : `${padding.left},${bottom} ${totalPoints} ${xFor(chartData.length - 1)},${bottom}`;
   const xTickIndexes = getAxisTickIndexes(chartData.length, 4);
   const spanMs =
     chartData.length > 1
@@ -784,7 +794,7 @@ export function UsageAnalyticsPage() {
         usageApi.getKeeperEvents({
           range,
           page: 1,
-          page_size: 50,
+          page_size: 100,
           failed: failedFilter,
           q: viewMode === 'monitoring' && monitorQuery.trim() ? monitorQuery.trim() : undefined,
         }),
@@ -802,7 +812,8 @@ export function UsageAnalyticsPage() {
           fromEvents.maxLatencyMs || fromDiag.maxLatencyMs || fromDiag.p95LatencyMs,
       });
       setOverviewSummary(summaryNext);
-      setTokenSeries(overviewSeriesToTokenSeries(overview));
+      // overview.series 常被压成 1 个小时桶，曲线会“一成不变”；优先用事件重采样
+      setTokenSeries(pickTokenSeries(overview, mappedEvents, range));
 
       const distributions = analysisToDistributions(analysis);
       setModelDistribution(distributions.models);

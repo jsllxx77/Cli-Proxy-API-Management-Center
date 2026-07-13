@@ -232,6 +232,96 @@ export const overviewSeriesToTokenSeries = (
   });
 };
 
+const RANGE_MS: Record<'15m' | '1h' | '6h' | '24h' | 'all', number> = {
+  '15m': 15 * 60 * 1000,
+  '1h': 4 * 60 * 60 * 1000, // maps to Keeper 4h
+  '6h': 8 * 60 * 60 * 1000, // maps to Keeper 8h
+  '24h': 24 * 60 * 60 * 1000,
+  all: 30 * 24 * 60 * 60 * 1000,
+};
+
+const SERIES_BUCKET_MS: Record<'15m' | '1h' | '6h' | '24h' | 'all', number> = {
+  '15m': 60 * 1000,
+  '1h': 5 * 60 * 1000,
+  '6h': 15 * 60 * 1000,
+  '24h': 30 * 60 * 1000,
+  all: 6 * 60 * 60 * 1000,
+};
+
+/**
+ * Build a multi-bucket token curve from event rows.
+ * Prefer this over overview.series when Keeper only returns a single coarse bucket
+ * (common for short retention / single-hour traffic).
+ */
+export const buildTokenSeriesFromEvents = (
+  events: UsageEvent[],
+  range: '15m' | '1h' | '6h' | '24h' | 'all',
+  nowMs = Date.now()
+): TokenSeriesPoint[] => {
+  const spanMs = RANGE_MS[range] ?? RANGE_MS['24h'];
+  const bucketMs = SERIES_BUCKET_MS[range] ?? SERIES_BUCKET_MS['24h'];
+  const endMs = nowMs;
+  const startMs = endMs - spanMs;
+  const firstBucket = Math.floor(startMs / bucketMs) * bucketMs;
+  const lastBucket = Math.floor(endMs / bucketMs) * bucketMs;
+  const bucketCount = Math.max(1, Math.floor((lastBucket - firstBucket) / bucketMs) + 1);
+
+  const buckets: TokenSeriesPoint[] = Array.from({ length: bucketCount }, (_, index) => {
+    const timestampMs = firstBucket + index * bucketMs;
+    return {
+      timestampMs,
+      label: new Date(timestampMs).toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      requests: 0,
+    };
+  });
+
+  for (const event of events) {
+    if (event.timestampMs < startMs || event.timestampMs > endMs + bucketMs) continue;
+    const index = Math.floor((event.timestampMs - firstBucket) / bucketMs);
+    if (index < 0 || index >= buckets.length) continue;
+    const bucket = buckets[index];
+    bucket.requests += 1;
+    bucket.totalTokens += event.tokens.totalTokens;
+    bucket.inputTokens += event.tokens.inputTokens;
+    bucket.outputTokens += event.tokens.outputTokens;
+    bucket.reasoningTokens += event.tokens.reasoningTokens;
+  }
+
+  return buckets;
+};
+
+/** Prefer event-based series when it has more temporal resolution than overview. */
+export const pickTokenSeries = (
+  overview: KeeperOverviewResponse | null,
+  events: UsageEvent[],
+  range: '15m' | '1h' | '6h' | '24h' | 'all'
+): TokenSeriesPoint[] => {
+  const fromEvents = buildTokenSeriesFromEvents(events, range);
+  const fromOverview = overviewSeriesToTokenSeries(overview);
+  const eventActive = fromEvents.filter((p) => p.requests > 0).length;
+  const overviewActive = fromOverview.filter((p) => p.requests > 0).length;
+
+  // Overview often collapses everything into 1 hourly bucket → flat/static chart.
+  if (eventActive >= 2 || fromEvents.length > fromOverview.length) {
+    return fromEvents;
+  }
+  if (overviewActive >= 1 && fromOverview.length >= 2) {
+    return fromOverview;
+  }
+  // Single overview bucket still worse than a filled event timeline
+  if (fromEvents.some((p) => p.requests > 0)) {
+    return fromEvents;
+  }
+  return fromOverview;
+};
+
 const compositionToGroups = (
   items: KeeperCompositionItem[] | undefined,
   limit = 12
