@@ -201,7 +201,8 @@ const createClient = (baseUrl: string): AxiosInstance =>
     withCredentials: true,
     headers: {
       'Content-Type': 'application/json',
-      'X-CPA-Usage-Keeper-Request': 'cpamc',
+      // Keeper requires this exact value on mutating methods (PUT/POST/PATCH/DELETE).
+      'X-CPA-Usage-Keeper-Request': 'fetch',
     },
   });
 
