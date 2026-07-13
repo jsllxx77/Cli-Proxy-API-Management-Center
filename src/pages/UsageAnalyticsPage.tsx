@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity,
-  AlertTriangle,
   BarChart3,
   CheckCircle2,
   Clock,
@@ -41,48 +40,40 @@ import { useInterval } from '@/hooks/useInterval';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import {
   getStoredKeeperBaseUrl,
+  KEEPER_RANGE_OPTIONS,
   keeperApi,
   logsApi,
   setStoredKeeperBaseUrl,
   usageApi,
+  type KeeperRange,
 } from '@/services/api';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import { downloadBlob } from '@/utils/download';
 import {
   analysisToCostGroups,
   analysisToDistributions,
-  averageLatencyFromEvents,
+  analysisTokenUsageToSeries,
   emptyOverviewSummary,
   keeperEventsToUsageEvents,
   latencyFromDiagnostics,
+  overviewSeriesToTokenSeries,
   overviewToSummary,
-  pickTokenSeries,
 } from '@/utils/keeperAdapters';
 import {
   exportUsageEventsJsonl,
   formatCompactNumber,
   formatDuration,
   formatUsd,
-  getFailedUsageEvents,
-  rankUsageLatency,
   type TokenSeriesPoint,
   type UsageEvent,
   type UsageGroup,
-  type UsageTimeRange,
 } from '@/utils/usageAnalytics';
 import { cn } from '@/lib/utils';
 
-const POLL_INTERVAL_MS = 10_000;
+const POLL_INTERVAL_MS = 15_000;
 const RECENT_REQUEST_LIMIT = 50;
 
 type UsageViewMode = 'overview' | 'monitoring' | 'cost';
-
-const timeRangeOptions: Array<{ value: UsageTimeRange; labelKey: string; fallback: string }> = [
-  { value: '1h', labelKey: 'usage.range_1h', fallback: '近 4 小时' },
-  { value: '6h', labelKey: 'usage.range_6h', fallback: '近 8 小时' },
-  { value: '24h', labelKey: 'usage.range_24h', fallback: '24 小时' },
-  { value: 'all', labelKey: 'usage.range_all', fallback: '30 天' },
-];
 
 const chartPalette = ['#0f172a', '#2563eb', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444'];
 
@@ -92,14 +83,7 @@ const getErrorMessage = (error: unknown) =>
 const formatPercent = (value: number) =>
   `${Number.isFinite(value) ? value.toFixed(value >= 99.5 || value <= 0 ? 0 : 1) : '0'}%`;
 
-const formatRate = (requests: number, range: UsageTimeRange) => {
-  if (!requests) return '0/min';
-  const minutes =
-    range === '15m' ? 15 : range === '1h' ? 60 : range === '6h' ? 360 : range === '24h' ? 1440 : 0;
-  if (!minutes) return `${formatCompactNumber(requests)}/total`;
-  const rate = requests / minutes;
-  return `${rate >= 10 ? rate.toFixed(0) : rate.toFixed(1)}/min`;
-};
+
 
 const axisLabelClass =
   'pointer-events-none absolute text-[9px] font-normal leading-none text-muted-foreground/55 tabular-nums';
@@ -518,62 +502,6 @@ function DistributionBars({
   );
 }
 
-function LatencyList({ groups, emptyText }: { groups: UsageGroup[]; emptyText: string }) {
-  const maxLatency = Math.max(...groups.map((group) => group.avgLatencyMs), 1);
-
-  if (!groups.length) {
-    return (
-      <div className="space-y-4">
-        {emptyBars.slice(0, 4).map((bar) => (
-          <div key={bar.label} className="space-y-2" aria-hidden="true">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="h-4 w-32 rounded bg-muted" />
-                <div className="mt-2 h-3 w-24 rounded bg-muted/70" />
-              </div>
-              <Badge variant="outline" className="shrink-0 font-mono">
-                0ms
-              </Badge>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-muted-foreground/20" style={{ width: `${bar.width}%` }} />
-            </div>
-          </div>
-        ))}
-        <div className="rounded-md border border-dashed bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-          {emptyText}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {groups.map((group) => (
-        <div key={group.key} className="space-y-2">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{group.label}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {formatCompactNumber(group.requests)} req / {formatCompactNumber(group.totalTokens)} tok
-              </div>
-            </div>
-            <Badge variant="outline" className="shrink-0 font-mono">
-              {formatDuration(group.avgLatencyMs)}
-            </Badge>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-foreground"
-              style={{ width: `${Math.max(4, (group.avgLatencyMs / maxLatency) * 100)}%` }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function RecentEventsTable({
   events,
   locale,
@@ -726,21 +654,23 @@ export function UsageAnalyticsPage() {
   const { showNotification } = useNotificationStore();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const config = useConfigStore((state) => state.config);
-  const [range, setRange] = useLocalStorage<UsageTimeRange>('usageAnalytics.range', '1h');
+  // Keeper-native ranges only
+  const [range, setRange] = useLocalStorage<KeeperRange>('usageAnalytics.keeperRange', '24h');
   const [autoRefresh, setAutoRefresh] = useLocalStorage('usageAnalytics.autoRefresh', true);
   const [viewMode, setViewMode] = useLocalStorage<UsageViewMode>('usageAnalytics.view', 'overview');
   const [monitorStatus, setMonitorStatus] = useLocalStorage<'all' | 'success' | 'failed'>(
     'usageAnalytics.monitorStatus',
     'all'
   );
-  const [monitorQuery, setMonitorQuery] = useState('');
   const [keeperBaseInput, setKeeperBaseInput] = useState(() => getStoredKeeperBaseUrl());
   const [events, setEvents] = useState<UsageEvent[]>([]);
+  const [eventsTotal, setEventsTotal] = useState(0);
   const [overviewSummary, setOverviewSummary] = useState(emptyOverviewSummary);
   const [tokenSeries, setTokenSeries] = useState<TokenSeriesPoint[]>([]);
+  const [seriesGranularity, setSeriesGranularity] = useState('hourly');
   const [modelDistribution, setModelDistribution] = useState<UsageGroup[]>([]);
   const [providerDistribution, setProviderDistribution] = useState<UsageGroup[]>([]);
-  const [endpointDistribution, setEndpointDistribution] = useState<UsageGroup[]>([]);
+  const [apiKeyDistribution, setApiKeyDistribution] = useState<UsageGroup[]>([]);
   const [costByModel, setCostByModel] = useState<
     Array<{ label: string; requests: number; totalTokens: number; cost: number; failures: number }>
   >([]);
@@ -753,6 +683,13 @@ export function UsageAnalyticsPage() {
   const [costByAccount, setCostByAccount] = useState<
     Array<{ label: string; requests: number; totalTokens: number; cost: number; failures: number }>
   >([]);
+  const [latencyDiag, setLatencyDiag] = useState({
+    p95LatencyMs: 0,
+    p95TtftMs: 0,
+    maxLatencyMs: 0,
+    maxTtftMs: 0,
+    totalPoints: 0,
+  });
   const [keeperOnline, setKeeperOnline] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -762,6 +699,12 @@ export function UsageAnalyticsPage() {
   const usageStatisticsEnabled = config?.raw?.['usage-statistics-enabled'];
   const usageDisabled = usageStatisticsEnabled === false;
 
+  /**
+   * One Keeper endpoint per view — no parallel fan-out, no client re-aggregation.
+   * overview → /usage/overview
+   * cost     → /usage/analysis
+   * monitoring → /usage/events
+   */
   const loadKeeperData = useCallback(async () => {
     if (connectionStatus !== 'connected') return;
     if (requestInFlightRef.current) return;
@@ -769,73 +712,69 @@ export function UsageAnalyticsPage() {
     requestInFlightRef.current = true;
     setLoading(true);
     try {
-      const healthy = await usageApi.getKeeperHealth();
-      setKeeperOnline(healthy);
-      if (!healthy) {
-        throw new Error(
-          t('usage.keeper_offline', {
-            defaultValue: 'CPA Usage Keeper 不可用，请确认 :18317 服务已启动',
-          })
-        );
-      }
-
-      const failedFilter =
-        viewMode === 'monitoring'
-          ? monitorStatus === 'failed'
-            ? true
-            : monitorStatus === 'success'
-              ? false
-              : undefined
-          : undefined;
-
-      const [overview, analysis, eventsRes] = await Promise.all([
-        usageApi.getKeeperOverview(range),
-        usageApi.getKeeperAnalysis(range),
-        usageApi.getKeeperEvents({
+      if (viewMode === 'overview') {
+        const overview = await usageApi.getKeeperOverview(range);
+        setKeeperOnline(true);
+        setOverviewSummary(overviewToSummary(overview));
+        setTokenSeries(overviewSeriesToTokenSeries(overview));
+        // Keeper overview series: short windows are hourly, multi-day are daily
+        setSeriesGranularity(range === '7d' || range === '30d' ? 'daily' : 'hourly');
+      } else if (viewMode === 'cost') {
+        const analysis = await usageApi.getKeeperAnalysis(range);
+        setKeeperOnline(true);
+        const distributions = analysisToDistributions(analysis);
+        setModelDistribution(distributions.models);
+        setProviderDistribution(distributions.providers);
+        setApiKeyDistribution(distributions.apiKeys);
+        setSeriesGranularity(distributions.granularity);
+        setTokenSeries(analysisTokenUsageToSeries(analysis));
+        const costs = analysisToCostGroups(analysis);
+        setCostByModel(costs.byModel);
+        setCostByProvider(costs.byProvider);
+        setCostByApiKey(costs.byApiKey);
+        setCostByAccount(costs.byAccount);
+        setLatencyDiag(latencyFromDiagnostics(analysis));
+        // cost totals from model composition sum when overview not loaded
+        const totalCost = costs.byModel.reduce((s, m) => s + m.cost, 0);
+        const totalReq = costs.byModel.reduce((s, m) => s + m.requests, 0);
+        const totalTok = costs.byModel.reduce((s, m) => s + m.totalTokens, 0);
+        setOverviewSummary((prev) => ({
+          ...prev,
+          requests: totalReq || prev.requests,
+          tokens: { ...prev.tokens, totalTokens: totalTok || prev.tokens.totalTokens },
+          totalCost: totalCost || prev.totalCost,
+          costAvailable: costs.byModel.some((m) => m.cost > 0) || prev.costAvailable,
+          p95LatencyMs: latencyFromDiagnostics(analysis).p95LatencyMs,
+          maxLatencyMs: latencyFromDiagnostics(analysis).maxLatencyMs,
+          granularityHint: distributions.granularity,
+        }));
+      } else {
+        const failedFilter =
+          monitorStatus === 'failed' ? true : monitorStatus === 'success' ? false : undefined;
+        const eventsRes = await usageApi.getKeeperEvents({
           range,
           page: 1,
-          page_size: 100,
+          page_size: 50,
           failed: failedFilter,
-          q: viewMode === 'monitoring' && monitorQuery.trim() ? monitorQuery.trim() : undefined,
-        }),
-      ]);
+        });
+        setKeeperOnline(true);
+        setEvents(keeperEventsToUsageEvents(eventsRes.events));
+        setEventsTotal(eventsRes.total_count ?? eventsRes.events?.length ?? 0);
+      }
 
-      const mappedEvents = keeperEventsToUsageEvents(eventsRes.events);
-      // overview 不含平均延迟；用事件明细优先，analysis.latency_diagnostics 兜底
-      const fromEvents = averageLatencyFromEvents(mappedEvents);
-      const fromDiag = latencyFromDiagnostics(analysis.latency_diagnostics);
-      const summaryNext = overviewToSummary(overview, {
-        avgLatencyMs: fromEvents.avgLatencyMs || fromDiag.avgLatencyMs,
-        avgTtftMs: fromEvents.avgTtftMs || fromDiag.avgTtftMs,
-        p95LatencyMs: fromDiag.p95LatencyMs,
-        maxLatencyMs:
-          fromEvents.maxLatencyMs || fromDiag.maxLatencyMs || fromDiag.p95LatencyMs,
-      });
-      setOverviewSummary(summaryNext);
-      // overview.series 常被压成 1 个小时桶，曲线会“一成不变”；优先用事件重采样
-      setTokenSeries(pickTokenSeries(overview, mappedEvents, range));
-
-      const distributions = analysisToDistributions(analysis);
-      setModelDistribution(distributions.models);
-      setProviderDistribution(distributions.providers);
-      setEndpointDistribution(distributions.apiKeys);
-      const costs = analysisToCostGroups(analysis);
-      setCostByModel(costs.byModel);
-      setCostByProvider(costs.byProvider);
-      setCostByApiKey(costs.byApiKey);
-      setCostByAccount(costs.byAccount);
-
-      setEvents(mappedEvents);
       setLastLoadedAt(Date.now());
       setError('');
     } catch (err: unknown) {
       setKeeperOnline(false);
-      setError(getErrorMessage(err) || t('usage.load_failed', { defaultValue: '加载统计数据失败' }));
+      setError(
+        getErrorMessage(err) ||
+          t('usage.load_failed', { defaultValue: '加载统计数据失败（Keeper）' })
+      );
     } finally {
       setLoading(false);
       requestInFlightRef.current = false;
     }
-  }, [connectionStatus, monitorQuery, monitorStatus, range, t, viewMode]);
+  }, [connectionStatus, monitorStatus, range, t, viewMode]);
 
   useHeaderRefresh(() => loadKeeperData());
 
@@ -858,15 +797,9 @@ export function UsageAnalyticsPage() {
   const summary = overviewSummary;
   const costSummary = {
     totalCost: overviewSummary.totalCost,
-    inputCost: 0,
-    outputCost: 0,
-    cacheCost: 0,
-    reasoningCost: 0,
     pricedRequests: overviewSummary.costAvailable ? overviewSummary.requests : 0,
     unpricedRequests: overviewSummary.costAvailable ? 0 : overviewSummary.requests,
   };
-  const latencyRanking = useMemo(() => rankUsageLatency(filteredEvents), [filteredEvents]);
-  const failedEvents = useMemo(() => getFailedUsageEvents(filteredEvents), [filteredEvents]);
   const recentEvents = useMemo(
     () =>
       [...filteredEvents].sort((a, b) => b.timestampMs - a.timestampMs).slice(0, RECENT_REQUEST_LIMIT),
@@ -874,7 +807,6 @@ export function UsageAnalyticsPage() {
   );
   const disableControls = connectionStatus !== 'connected';
   const failureRate = Math.max(0, 100 - summary.successRate);
-  const topModel = modelDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
   const topProvider =
     providerDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
 
@@ -892,9 +824,10 @@ export function UsageAnalyticsPage() {
 
   const clearEvents = () => {
     setEvents([]);
+    setEventsTotal(0);
     showNotification(
       t('usage.clear_local_only', {
-        defaultValue: '已清空当前页列表（服务端 SQLite 数据仍保留在 Keeper）',
+        defaultValue: '已清空当前列表（Keeper SQLite 不受影响）',
       }),
       'success'
     );
@@ -1029,14 +962,14 @@ export function UsageAnalyticsPage() {
           title={t('usage.total_requests', { defaultValue: '请求数' })}
           value={formatCompactNumber(summary.requests)}
           subtitle={`${formatCompactNumber(summary.successes)} ${t('common.success')} / ${formatCompactNumber(summary.failures)} ${t('common.failure')}`}
-          badge={formatRate(summary.requests, range)}
+          badge={summary.rpm ? `${summary.rpm.toFixed(2)} RPM` : 'RPM'}
           icon={<TrendingUp className="size-5" />}
         />
         <MetricCard
           title={t('usage.total_tokens', { defaultValue: 'Token 总量' })}
           value={formatCompactNumber(summary.tokens.totalTokens)}
-          subtitle={`I ${formatCompactNumber(summary.tokens.inputTokens)} / O ${formatCompactNumber(summary.tokens.outputTokens)} / R ${formatCompactNumber(summary.tokens.reasoningTokens)}`}
-          badge={`Cache ${formatCompactNumber(summary.tokens.cachedTokens + summary.tokens.cacheReadTokens)}`}
+          subtitle={`I ${formatCompactNumber(summary.tokens.inputTokens)} / R ${formatCompactNumber(summary.tokens.reasoningTokens)} / Cache ${formatCompactNumber(summary.tokens.cacheReadTokens)}`}
+          badge={summary.tpm ? `${formatCompactNumber(summary.tpm)} TPM` : 'TPM'}
           icon={<Zap className="size-5" />}
           tone="success"
         />
@@ -1052,29 +985,35 @@ export function UsageAnalyticsPage() {
           tone={summary.failures > 0 ? 'warning' : 'success'}
         />
         <MetricCard
-          title={t('usage.avg_latency', { defaultValue: '平均延迟' })}
-          value={formatDuration(summary.avgLatencyMs)}
-          subtitle={`TTFT ${formatDuration(summary.avgTtftMs)} / ${topModel}`}
+          title={t('usage.latency_p95', { defaultValue: '延迟 P95' })}
+          value={
+            latencyDiag.p95LatencyMs > 0 || summary.p95LatencyMs > 0
+              ? formatDuration(latencyDiag.p95LatencyMs || summary.p95LatencyMs)
+              : '—'
+          }
+          subtitle={
+            latencyDiag.p95TtftMs > 0
+              ? `TTFT P95 ${formatDuration(latencyDiag.p95TtftMs)}`
+              : t('usage.latency_from_analysis', {
+                  defaultValue: '来自 analysis.latency_diagnostics',
+                })
+          }
           badge={
-            summary.p95LatencyMs > 0
-              ? `P95 ${formatDuration(summary.p95LatencyMs)}`
-              : summary.maxLatencyMs > 0
-                ? `max ${formatDuration(summary.maxLatencyMs)}`
-                : latencyRanking[0]
-                  ? formatDuration(latencyRanking[0].maxLatencyMs)
-                  : '0ms'
+            latencyDiag.maxLatencyMs > 0
+              ? `max ${formatDuration(latencyDiag.maxLatencyMs)}`
+              : seriesGranularity
           }
           icon={<Clock className="size-5" />}
         />
         <MetricCard
           title={t('usage.est_cost', { defaultValue: '估算成本' })}
           value={formatUsd(costSummary.totalCost)}
-          subtitle={t('usage.cost_priced_ratio', {
-            defaultValue: '已定价 {{priced}} / 未定价 {{unpriced}}',
-            priced: costSummary.pricedRequests,
-            unpriced: costSummary.unpricedRequests,
-          })}
-          badge={formatUsd(costSummary.inputCost + costSummary.outputCost)}
+          subtitle={
+            summary.costAvailable
+              ? t('usage.cost_available', { defaultValue: '已按价格表估算' })
+              : t('usage.cost_unavailable', { defaultValue: '未配置模型价格' })
+          }
+          badge={summary.windowMinutes ? `${summary.windowMinutes}m` : 'cost'}
           icon={<DollarSign className="size-5" />}
           tone="success"
         />
@@ -1085,31 +1024,31 @@ export function UsageAnalyticsPage() {
           <div>
             <CardTitle>
               {viewMode === 'monitoring'
-                ? t('usage.view_monitoring', { defaultValue: '监控' })
+                ? t('usage.view_monitoring', { defaultValue: '请求事件' })
                 : viewMode === 'cost'
-                  ? t('usage.view_cost', { defaultValue: '成本' })
+                  ? t('usage.view_cost', { defaultValue: '分析 / 成本' })
                   : t('usage.token_curve', { defaultValue: 'Token 曲线' })}
             </CardTitle>
             <CardDescription>
               {viewMode === 'monitoring'
                 ? t('usage.monitoring_subtitle', {
-                    defaultValue: '实时请求流：按状态 / 关键词筛选，支持失败摘要',
+                    defaultValue: 'Keeper /usage/events · 请求级明细',
                   })
                 : viewMode === 'cost'
                   ? t('usage.cost_subtitle', {
-                      defaultValue: '基于本地模型价格表估算，不等于提供商账单',
+                      defaultValue: `Keeper /usage/analysis · 粒度 ${seriesGranularity}`,
                     })
                   : t('usage.token_curve_subtitle', {
-                      defaultValue: 'Input / Output / Reasoning 聚合',
+                      defaultValue: `Keeper /usage/overview.series · 粒度 ${seriesGranularity}`,
                     })}
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Tabs value={range} onValueChange={(value) => setRange(value as UsageTimeRange)}>
+            <Tabs value={range} onValueChange={(value) => setRange(value as KeeperRange)}>
               <TabsList>
-                {timeRangeOptions.slice(1).map((option) => (
+                {KEEPER_RANGE_OPTIONS.map((option) => (
                   <TabsTrigger key={option.value} value={option.value} className="px-3">
-                    {t(option.labelKey, { defaultValue: option.fallback })}
+                    {option.label}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -1160,35 +1099,25 @@ export function UsageAnalyticsPage() {
             <div className="flex items-center gap-2">
               <Filter className="size-4 text-muted-foreground" />
               <CardTitle className="text-base">
-                {t('usage.filters', { defaultValue: '筛选' })}
+                {t('usage.filters', { defaultValue: '结果筛选' })} · {eventsTotal} total
               </CardTitle>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Tabs
-                value={monitorStatus}
-                onValueChange={(value) => setMonitorStatus(value as 'all' | 'success' | 'failed')}
-              >
-                <TabsList>
-                  <TabsTrigger value="all" className="px-3">
-                    {t('usage.filter_all', { defaultValue: '全部' })}
-                  </TabsTrigger>
-                  <TabsTrigger value="success" className="px-3">
-                    {t('usage.filter_success', { defaultValue: '成功' })}
-                  </TabsTrigger>
-                  <TabsTrigger value="failed" className="px-3">
-                    {t('usage.filter_failed', { defaultValue: '失败' })}
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-              <input
-                className="h-9 min-w-[220px] rounded-md border border-border bg-background px-3 text-sm"
-                value={monitorQuery}
-                onChange={(e) => setMonitorQuery(e.target.value)}
-                placeholder={t('usage.filter_query_placeholder', {
-                  defaultValue: '模型 / 账号 / API Key / 状态码…',
-                })}
-              />
-            </div>
+            <Tabs
+              value={monitorStatus}
+              onValueChange={(value) => setMonitorStatus(value as 'all' | 'success' | 'failed')}
+            >
+              <TabsList>
+                <TabsTrigger value="all" className="px-3">
+                  {t('usage.filter_all', { defaultValue: '全部' })}
+                </TabsTrigger>
+                <TabsTrigger value="success" className="px-3">
+                  {t('usage.filter_success', { defaultValue: '成功' })}
+                </TabsTrigger>
+                <TabsTrigger value="failed" className="px-3">
+                  {t('usage.filter_failed', { defaultValue: '失败' })}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
           </CardHeader>
           <CardContent>
             <RecentEventsTable
@@ -1204,111 +1133,29 @@ export function UsageAnalyticsPage() {
       ) : null}
 
       {viewMode === 'overview' ? (
-        <>
-          <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-            <Card className="rounded-xl">
-              <CardHeader>
-                <CardTitle>
-                  {t('usage.model_distribution', { defaultValue: '模型调用分布' })}
-                </CardTitle>
-                <CardDescription>按本地队列中的请求量聚合模型调用。</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <DistributionBars
-                  groups={modelDistribution}
-                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-                />
-              </CardContent>
-            </Card>
-
-            <Card className="rounded-xl">
-              <CardHeader>
-                <CardTitle>{t('usage.latency_ranking', { defaultValue: '延迟排行' })}</CardTitle>
-                <CardDescription>按 Provider 与模型聚合平均延迟。</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LatencyList
-                  groups={latencyRanking}
-                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-                />
-              </CardContent>
-            </Card>
-          </section>
-
-          <section className="grid gap-4 lg:grid-cols-2">
-            <Card className="rounded-xl">
-              <CardHeader>
-                <CardTitle>
-                  {t('usage.provider_distribution', { defaultValue: 'Provider 分布' })}
-                </CardTitle>
-                <CardDescription>按上游 Provider 聚合请求。</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <DistributionBars
-                  groups={providerDistribution}
-                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-                />
-              </CardContent>
-            </Card>
-            <Card className="rounded-xl">
-              <CardHeader>
-                <CardTitle>
-                  {t('usage.endpoint_distribution', { defaultValue: 'Endpoint 分布' })}
-                </CardTitle>
-                <CardDescription>按 API Endpoint 聚合请求。</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <DistributionBars
-                  groups={endpointDistribution}
-                  emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-                />
-              </CardContent>
-            </Card>
-          </section>
-
-          <Card className="rounded-xl">
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <CardTitle>
-                  {t('usage.recent_requests', { defaultValue: '最近请求' })}
-                </CardTitle>
-                <CardDescription>
-                  {lastLoadedAt
-                    ? t('usage.last_loaded', {
-                        defaultValue: '最近 {{time}}',
-                        time: formatTime(lastLoadedAt, i18n.language),
-                      })
-                    : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
-                </CardDescription>
-              </div>
-              <Badge
-                variant={failedEvents.length > 0 ? 'warning' : 'success'}
-                className="w-fit rounded-full"
-              >
-                {failedEvents.length > 0 ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <AlertTriangle className="size-3.5" />
-                    {failedEvents.length} failed
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5">
-                    <CheckCircle2 className="size-3.5" />
-                    No failures
-                  </span>
-                )}
-              </Badge>
-            </CardHeader>
-            <CardContent>
-              <RecentEventsTable
-                events={recentEvents}
-                locale={i18n.language}
-                emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-                onDownload={downloadRequestLog}
-                showCost
-              />
-            </CardContent>
-          </Card>
-        </>
+        <Card className="rounded-xl">
+          <CardHeader>
+            <CardTitle>{t('usage.overview_meta', { defaultValue: '窗口信息' })}</CardTitle>
+            <CardDescription>
+              {lastLoadedAt
+                ? t('usage.last_loaded', {
+                    defaultValue: '最近 {{time}}',
+                    time: formatTime(lastLoadedAt, i18n.language),
+                  })
+                : t('usage.not_loaded', { defaultValue: '尚未刷新' })}
+              {' · '}
+              series buckets: {tokenSeries.length}
+              {' · '}
+              window: {summary.windowMinutes || '—'} min
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            {t('usage.overview_note', {
+              defaultValue:
+                '总览仅请求 /usage/overview。曲线为 Keeper 小时/天序列；模型构成与延迟诊断请切换到「成本」页（/usage/analysis）。请求明细请切换到「监控」页（/usage/events）。',
+            })}
+          </CardContent>
+        </Card>
       ) : null}
 
       {viewMode === 'cost' ? (
@@ -1320,7 +1167,7 @@ export function UsageAnalyticsPage() {
                   <CardTitle>{t('usage.cost_by_model', { defaultValue: '模型成本排行' })}</CardTitle>
                   <CardDescription>
                     {t('usage.cost_by_model_desc', {
-                      defaultValue: '价格在 Keeper 中维护；未配置时显示为 0',
+                      defaultValue: `model_composition · ${seriesGranularity}`,
                     })}
                   </CardDescription>
                 </div>
@@ -1335,11 +1182,9 @@ export function UsageAnalyticsPage() {
             <Card className="rounded-xl">
               <CardHeader>
                 <CardTitle>
-                  {t('usage.cost_by_provider', { defaultValue: 'Provider 成本' })}
+                  {t('usage.cost_by_provider', { defaultValue: 'AI Provider' })}
                 </CardTitle>
-                <CardDescription>
-                  {t('usage.cost_by_provider_desc', { defaultValue: '按上游提供商拆解' })}
-                </CardDescription>
+                <CardDescription>ai_provider_composition</CardDescription>
               </CardHeader>
               <CardContent>
                 <CostRankTable
@@ -1350,10 +1195,8 @@ export function UsageAnalyticsPage() {
             </Card>
             <Card className="rounded-xl">
               <CardHeader>
-                <CardTitle>{t('usage.cost_by_key', { defaultValue: 'API Key 成本' })}</CardTitle>
-                <CardDescription>
-                  {t('usage.cost_by_key_desc', { defaultValue: '定位高消耗调用方' })}
-                </CardDescription>
+                <CardTitle>{t('usage.cost_by_key', { defaultValue: 'API Key' })}</CardTitle>
+                <CardDescription>api_key_composition</CardDescription>
               </CardHeader>
               <CardContent>
                 <CostRankTable
@@ -1365,13 +1208,9 @@ export function UsageAnalyticsPage() {
             <Card className="rounded-xl">
               <CardHeader>
                 <CardTitle>
-                  {t('usage.cost_by_account', { defaultValue: '账号 / Auth 成本' })}
+                  {t('usage.cost_by_account', { defaultValue: 'Auth Files' })}
                 </CardTitle>
-                <CardDescription>
-                  {t('usage.cost_by_account_desc', {
-                    defaultValue: '按 auth_index 或 API Key 拆解',
-                  })}
-                </CardDescription>
+                <CardDescription>auth_files_composition</CardDescription>
               </CardHeader>
               <CardContent>
                 <CostRankTable
@@ -1384,21 +1223,22 @@ export function UsageAnalyticsPage() {
           <Card className="rounded-xl">
             <CardHeader>
               <CardTitle>
-                {t('usage.cost_breakdown', { defaultValue: '成本构成' })}
+                {t('usage.latency_diagnostics', { defaultValue: '延迟诊断' })}
               </CardTitle>
               <CardDescription>
-                Input {formatUsd(costSummary.inputCost)} · Output{' '}
-                {formatUsd(costSummary.outputCost)} · Reasoning{' '}
-                {formatUsd(costSummary.reasoningCost)} · Cache {formatUsd(costSummary.cacheCost)}
+                P95 latency {formatDuration(latencyDiag.p95LatencyMs)} · P95 TTFT{' '}
+                {formatDuration(latencyDiag.p95TtftMs)} · max{' '}
+                {formatDuration(latencyDiag.maxLatencyMs)} · points {latencyDiag.totalPoints}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <RecentEventsTable
-                events={recentEvents}
-                locale={i18n.language}
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <DistributionBars
+                groups={modelDistribution}
                 emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-                onDownload={downloadRequestLog}
-                showCost
+              />
+              <DistributionBars
+                groups={apiKeyDistribution}
+                emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
               />
             </CardContent>
           </Card>

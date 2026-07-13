@@ -31,21 +31,16 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/shadcn/ui/table';
-import { apiKeysApi, authFilesApi, providersApi, usageApi } from '@/services/api';
+import { apiKeysApi, authFilesApi, providersApi, usageApi, type KeeperRange } from '@/services/api';
 import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
 import {
   emptyOverviewSummary,
-  keeperEventsToUsageEvents,
+  overviewSeriesToTokenSeries,
   overviewToSummary,
-  pickTokenSeries,
 } from '@/utils/keeperAdapters';
-import {
-  formatCompactNumber,
-  type TokenSeriesPoint,
-  type UsageTimeRange,
-} from '@/utils/usageAnalytics';
+import { formatCompactNumber, type TokenSeriesPoint } from '@/utils/usageAnalytics';
 
 interface QuickStat {
   label: string;
@@ -65,63 +60,36 @@ interface ProviderStats {
 }
 
 const providerColors = ['#111111', '#737373', '#a3a3a3', '#d4d4d4'];
-const tokenTrendRanges: Array<{ value: UsageTimeRange; label: string }> = [
-  { value: '1h', label: '1 小时' },
-  { value: '6h', label: '6 小时' },
+const tokenTrendRanges: Array<{ value: KeeperRange; label: string }> = [
+  { value: '4h', label: '4 小时' },
   { value: '24h', label: '24 小时' },
-  { value: 'all', label: '全部' },
+  { value: '7d', label: '7 天' },
+  { value: '30d', label: '30 天' },
 ];
 
-const dashboardAxisLabelClass =
-  'pointer-events-none absolute text-[9px] font-normal leading-none text-muted-foreground/55 tabular-nums';
-
 const trimTrailingEmptyTokenBuckets = (series: TokenSeriesPoint[]) => {
-  let end = series.length;
-  while (end > 1 && series[end - 1].requests === 0 && series[end - 1].totalTokens === 0) {
+  if (!series.length) return series;
+  let end = series.length - 1;
+  while (end > 0 && series[end].requests === 0 && series[end].totalTokens === 0) {
     end -= 1;
   }
-  return series.slice(0, end);
+  return series.slice(0, end + 1);
 };
 
-const normalizeApiKeyList = (input: unknown): string[] => {
-  if (!Array.isArray(input)) return [];
-  const seen = new Set<string>();
-  const keys: string[] = [];
+const normalizeApiKeyList = (keys?: string[]) =>
+  (keys ?? []).map((k) => String(k).trim()).filter(Boolean);
 
-  input.forEach((item) => {
-    const record =
-      item !== null && typeof item === 'object' && !Array.isArray(item)
-        ? (item as Record<string, unknown>)
-        : null;
-    const value =
-      typeof item === 'string'
-        ? item
-        : record
-          ? (record['api-key'] ?? record['apiKey'] ?? record.key ?? record.Key)
-          : '';
-    const trimmed = String(value ?? '').trim();
-    if (!trimmed || seen.has(trimmed)) return;
-    seen.add(trimmed);
-    keys.push(trimmed);
-  });
-
-  return keys;
-};
-
-function SectionCard({ stat }: { stat: QuickStat }) {
+function SectionCard({
+  stat,
+}: {
+  stat: QuickStat;
+}) {
   return (
     <Card className="@container/card rounded-xl bg-gradient-to-t from-muted/50 to-card shadow-sm">
       <CardHeader className="relative pb-2">
         <CardDescription>{stat.label}</CardDescription>
         <CardTitle className="text-3xl font-semibold tabular-nums tracking-normal @[260px]/card:text-4xl">
-          {stat.loading ? (
-            <span className="inline-flex items-center gap-2 text-muted-foreground">
-              <RefreshCw className="size-5 animate-spin" />
-              ...
-            </span>
-          ) : (
-            stat.value
-          )}
+          {stat.loading ? '…' : stat.value}
         </CardTitle>
         <div className="absolute right-4 top-4">
           <Badge variant="outline" className="rounded-full">
@@ -132,191 +100,63 @@ function SectionCard({ stat }: { stat: QuickStat }) {
       <CardFooter className="flex-col items-start gap-1 text-sm">
         <div className="flex gap-2 font-medium leading-none">
           {stat.detail}
-          <TrendingUp className="size-4" />
+          {stat.icon}
         </div>
-        <div className="line-clamp-1 text-muted-foreground">{stat.path}</div>
+        <Link to={stat.path} className="text-muted-foreground underline-offset-4 hover:underline">
+          打开
+        </Link>
       </CardFooter>
     </Card>
   );
 }
 
-function TokenTrendChart({
-  data,
-  loading,
-}: {
-  data: TokenSeriesPoint[];
-  loading: boolean;
-}) {
-  const width = 1080;
-  const height = 360;
-  const padding = { top: 30, right: 24, bottom: 40, left: 58 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-  const bottom = padding.top + plotHeight;
-  const hasData = data.some((point) => point.requests > 0 && point.totalTokens > 0);
-  const maxValue = Math.max(...data.map((point) => point.totalTokens), 1);
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
-    y: bottom - ratio * plotHeight,
-    label: hasData ? formatCompactNumber(maxValue * ratio) : ratio === 0 ? '0' : `${ratio * 100}%`,
-  }));
-  const pointFor = (value: number, index: number, length: number) => {
-    const x = padding.left + (plotWidth * index) / Math.max(1, length - 1);
-    const y = bottom - (value / maxValue) * plotHeight;
-    return [x, y] as const;
-  };
-  const linePoints = (key: 'totalTokens' | 'inputTokens' | 'outputTokens' | 'reasoningTokens') =>
-    data.map((point, index) => pointFor(point[key], index, data.length)).map(([x, y]) => `${x},${y}`).join(' ');
-  const totalPoints = linePoints('totalTokens');
-  const inputPoints = linePoints('inputTokens');
-  const outputPoints = linePoints('outputTokens');
-  const reasoningPoints = linePoints('reasoningTokens');
-  const areaPoints = data.length
-    ? `${padding.left},${bottom} ${totalPoints} ${padding.left + plotWidth},${bottom}`
-    : '';
-  const xLabelIndexes = data.length
-    ? Array.from(new Set([0, Math.floor((data.length - 1) / 2), data.length - 1]))
-    : [];
-
-  return (
-    <div className="relative h-[360px] w-full overflow-hidden rounded-lg border bg-background">
-      <svg
-        className="h-full w-full"
-        viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label="Token 使用趋势"
-      >
-        <defs>
-          <linearGradient id="dashboardTokenFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#111111" stopOpacity="0.24" />
-            <stop offset="100%" stopColor="#111111" stopOpacity="0.03" />
-          </linearGradient>
-        </defs>
-        {yTicks.map((tick) => (
-          <g key={tick.y}>
-            <line
-              x1={padding.left}
-              x2={padding.left + plotWidth}
-              y1={tick.y}
-              y2={tick.y}
-              stroke="var(--border-color)"
-              strokeDasharray="5 8"
-              strokeWidth="1"
-            />
-          </g>
-        ))}
-        {hasData && (
-          <>
-            <polygon points={areaPoints} fill="url(#dashboardTokenFill)" />
-            <polyline points={totalPoints} fill="none" stroke="#111111" strokeWidth="2.4" strokeLinejoin="round" />
-            <polyline points={inputPoints} fill="none" stroke="#2563eb" strokeWidth="1.9" strokeLinejoin="round" />
-            <polyline points={outputPoints} fill="none" stroke="#10b981" strokeWidth="1.9" strokeLinejoin="round" />
-            <polyline points={reasoningPoints} fill="none" stroke="#8b5cf6" strokeWidth="1.6" strokeLinejoin="round" />
-          </>
-        )}
-      </svg>
-      {yTicks.map((tick) => (
-        <span
-          key={tick.label}
-          className={dashboardAxisLabelClass}
-          style={{
-            left: `${((padding.left - 12) / width) * 100}%`,
-            top: `${(tick.y / height) * 100}%`,
-            transform: 'translate(-100%, -50%)',
-          }}
-        >
-          {tick.label}
-        </span>
-      ))}
-      {xLabelIndexes.map((index) => {
-        const point = data[index];
-        const x = padding.left + (plotWidth * index) / Math.max(1, data.length - 1);
-        return (
-          <span
-            key={`${point.timestampMs}-${index}`}
-            className={dashboardAxisLabelClass}
-            style={{
-              left: `${(x / width) * 100}%`,
-              bottom: '8px',
-              transform:
-                index === 0
-                  ? 'translateX(0)'
-                  : index === data.length - 1
-                    ? 'translateX(-100%)'
-                    : 'translateX(-50%)',
-            }}
-          >
-            {point.label}
-          </span>
-        );
-      })}
-      {!hasData && (
-        <div className="absolute inset-0 grid place-items-center px-6 text-center">
-          <div className="rounded-md border bg-card/95 px-5 py-4 text-sm shadow-sm">
-            <div className="font-medium text-foreground">
-              {loading ? '正在读取 Token 数据' : '暂无 Token 使用数据'}
-            </div>
-            <div className="mt-1 text-muted-foreground">
-              产生模型请求后，这里会按时间展示 Token 趋势。
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProviderBars({
-  rows,
-  emptyText,
-}: {
-  rows: Array<{ label: string; value: number | null; color: string }>;
-  emptyText: string;
-}) {
-  const readyRows = rows.filter((row) => row.value !== null);
-  const maxValue = Math.max(...readyRows.map((row) => row.value ?? 0), 1);
-
-  if (readyRows.length === 0) {
-    return <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">{emptyText}</div>;
+function TokenTrendChart({ data, loading }: { data: TokenSeriesPoint[]; loading?: boolean }) {
+  if (loading) {
+    return (
+      <div className="grid h-[220px] place-items-center rounded-md border text-sm text-muted-foreground">
+        加载 Keeper overview…
+      </div>
+    );
+  }
+  if (!data.length || !data.some((p) => p.requests > 0 || p.totalTokens > 0)) {
+    return (
+      <div className="grid h-[220px] place-items-center rounded-md border text-sm text-muted-foreground">
+        暂无 overview.series 数据
+      </div>
+    );
   }
 
+  const width = 720;
+  const height = 200;
+  const pad = { t: 16, r: 16, b: 28, l: 48 };
+  const plotW = width - pad.l - pad.r;
+  const plotH = height - pad.t - pad.b;
+  const maxV = Math.max(...data.map((d) => d.totalTokens), 1);
+  const xFor = (i: number) =>
+    pad.l + (plotW * i) / Math.max(1, Math.max(data.length, 2) - 1);
+  const yFor = (v: number) => pad.t + plotH - (v / maxV) * plotH;
+  const points =
+    data.length === 1
+      ? `${pad.l},${yFor(data[0].totalTokens)} ${pad.l + plotW},${yFor(data[0].totalTokens)}`
+      : data.map((d, i) => `${xFor(i)},${yFor(d.totalTokens)}`).join(' ');
+
   return (
-    <div className="space-y-4">
-      {rows.map((row, index) => {
-        const value = row.value ?? 0;
-        return (
-          <div key={row.label} className="space-y-2">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <div className="flex min-w-0 items-center gap-2">
-                <span
-                  className="size-2.5 shrink-0 rounded-sm"
-                  style={{ background: row.color }}
-                />
-                <span className="truncate font-medium">{row.label}</span>
-              </div>
-              <span className="font-mono text-xs text-muted-foreground">{row.value ?? '-'}</span>
-            </div>
-            <div className="h-8 rounded-md border bg-muted/35 p-1">
-              <div
-                className="h-full min-w-6 rounded-sm"
-                style={{
-                  width: `${Math.max(8, (value / maxValue) * 100)}%`,
-                  background: providerColors[index % providerColors.length],
-                }}
-              />
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <svg className="h-[220px] w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" />
+      {data.map((d, i) => (
+        <circle key={i} cx={data.length === 1 ? pad.l + plotW / 2 : xFor(i)} cy={yFor(d.totalTokens)} r="3" fill="currentColor">
+          <title>
+            {d.label}: {formatCompactNumber(d.totalTokens)} tok / {d.requests} req
+          </title>
+        </circle>
+      ))}
+    </svg>
   );
 }
 
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
-  const serverVersion = useAuthStore((state) => state.serverVersion);
-  const serverBuildDate = useAuthStore((state) => state.serverBuildDate);
   const apiBase = useAuthStore((state) => state.apiBase);
   const config = useConfigStore((state) => state.config);
   const models = useModelsStore((state) => state.models);
@@ -333,21 +173,10 @@ export function DashboardPage() {
     claude: null,
     openai: null,
   });
-  const [tokenRange, setTokenRange] = useLocalStorage<UsageTimeRange>('usageAnalytics.range', '1h');
+  const [tokenRange, setTokenRange] = useLocalStorage<KeeperRange>('dashboard.keeperRange', '24h');
   const [usageLoading, setUsageLoading] = useState(false);
   const [tokenSeries, setTokenSeries] = useState<TokenSeriesPoint[]>([]);
-  const [tokenSummary, setTokenSummary] = useState(() => {
-    const s = emptyOverviewSummary();
-    return {
-      requests: s.requests,
-      successes: s.successes,
-      failures: s.failures,
-      successRate: s.successRate,
-      avgLatencyMs: s.avgLatencyMs,
-      avgTtftMs: s.avgTtftMs,
-      tokens: s.tokens,
-    };
-  });
+  const [tokenSummary, setTokenSummary] = useState(() => emptyOverviewSummary());
   const [loading, setLoading] = useState(true);
   const apiKeysCache = useRef<string[]>([]);
 
@@ -363,10 +192,10 @@ export function DashboardPage() {
       return configKeys;
     }
     try {
-      const list = await apiKeysApi.list();
-      const normalized = normalizeApiKeyList(list);
-      apiKeysCache.current = normalized;
-      return normalized;
+      const keys = await apiKeysApi.list();
+      const list = normalizeApiKeyList(keys);
+      apiKeysCache.current = list;
+      return list;
     } catch {
       return [];
     }
@@ -374,21 +203,24 @@ export function DashboardPage() {
 
   const fetchModels = useCallback(async () => {
     if (connectionStatus !== 'connected' || !apiBase) return;
+    const apiKeys = await resolveApiKeysForModels();
+    if (!apiKeys[0]) return;
     try {
-      const apiKeys = await resolveApiKeysForModels();
       await fetchModelsFromStore(apiBase, apiKeys[0]);
     } catch {
-      // Keep the overview usable when model probing fails.
+      // ignore
     }
   }, [connectionStatus, apiBase, resolveApiKeysForModels, fetchModelsFromStore]);
 
   useEffect(() => {
     const configCount = (key: string) => {
-      const value = config?.raw?.[key];
-      return Array.isArray(value) ? value.length : null;
+      const raw = config?.raw?.[key];
+      return Array.isArray(raw) ? raw.length : null;
     };
-    const resolvedLength = (result: PromiseSettledResult<unknown>, fallback: number | null) =>
-      result.status === 'fulfilled' && Array.isArray(result.value) ? result.value.length : fallback;
+    const resolvedLength = (
+      result: PromiseSettledResult<unknown[]>,
+      fallback: number | null
+    ) => (result.status === 'fulfilled' ? result.value.length : fallback);
 
     const fetchStats = async () => {
       setLoading(true);
@@ -404,7 +236,7 @@ export function DashboardPage() {
           ]);
 
         setStats({
-          apiKeys: keysRes.status === 'fulfilled' ? keysRes.value.length : config?.apiKeys?.length ?? null,
+          apiKeys: keysRes.status === 'fulfilled' ? keysRes.value.length : null,
           authFiles: filesRes.status === 'fulfilled' ? filesRes.value.files.length : null,
         });
 
@@ -429,57 +261,28 @@ export function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
-
     const fetchUsage = async () => {
       if (connectionStatus !== 'connected') {
         setUsageLoading(false);
         return;
       }
-
       setUsageLoading(true);
       try {
-        const [overview, eventsRes] = await Promise.all([
-          usageApi.getKeeperOverview(tokenRange),
-          usageApi.getKeeperEvents({ range: tokenRange, page: 1, page_size: 100 }),
-        ]);
+        // Single Keeper request: /usage/overview only
+        const overview = await usageApi.getKeeperOverview(tokenRange);
         if (cancelled) return;
-        const mappedEvents = keeperEventsToUsageEvents(eventsRes.events);
-        const summary = overviewToSummary(overview);
-        setTokenSummary({
-          requests: summary.requests,
-          successes: summary.successes,
-          failures: summary.failures,
-          successRate: summary.successRate,
-          avgLatencyMs: summary.avgLatencyMs,
-          avgTtftMs: summary.avgTtftMs,
-          tokens: summary.tokens,
-        });
-        setTokenSeries(
-          trimTrailingEmptyTokenBuckets(pickTokenSeries(overview, mappedEvents, tokenRange))
-        );
+        setTokenSummary(overviewToSummary(overview));
+        setTokenSeries(trimTrailingEmptyTokenBuckets(overviewSeriesToTokenSeries(overview)));
       } catch {
         if (!cancelled) {
-          const empty = emptyOverviewSummary();
-          setTokenSummary({
-            requests: empty.requests,
-            successes: empty.successes,
-            failures: empty.failures,
-            successRate: empty.successRate,
-            avgLatencyMs: empty.avgLatencyMs,
-            avgTtftMs: empty.avgTtftMs,
-            tokens: empty.tokens,
-          });
+          setTokenSummary(emptyOverviewSummary());
           setTokenSeries([]);
         }
       } finally {
-        if (!cancelled) {
-          setUsageLoading(false);
-        }
+        if (!cancelled) setUsageLoading(false);
       }
     };
-
     void fetchUsage();
-
     return () => {
       cancelled = true;
     };
@@ -511,56 +314,50 @@ export function DashboardPage() {
         ? 'common.connecting'
         : 'common.disconnected'
   );
-
-  const providerRows = [
-    { label: 'Gemini', value: providerStats.gemini, color: providerColors[0] },
-    { label: 'Codex', value: providerStats.codex, color: providerColors[1] },
-    { label: 'Claude', value: providerStats.claude, color: providerColors[2] },
-    { label: 'OpenAI', value: providerStats.openai, color: providerColors[3] },
-  ];
-  const metricCards: QuickStat[] = [
-    {
-      label: t('dashboard.management_keys'),
-      value: stats.apiKeys ?? '-',
-      icon: <KeyRound className="size-4" />,
-      path: '/config',
-      loading: loading && stats.apiKeys === null,
-      detail: t('nav.config_management'),
-      badge: connectionLabel,
-    },
-    {
-      label: t('nav.ai_providers'),
-      value: providerStatsReady ? totalProviderKeys : '-',
-      icon: <Bot className="size-4" />,
-      path: '/ai-providers',
-      loading,
-      detail: `G:${providerStats.gemini ?? '-'} C:${providerStats.codex ?? '-'} Cl:${providerStats.claude ?? '-'} O:${providerStats.openai ?? '-'}`,
-      badge: providerStatsReady ? '+ ready' : 'pending',
-    },
-    {
-      label: t('nav.auth_files'),
-      value: stats.authFiles ?? '-',
-      icon: <FileText className="size-4" />,
-      path: '/auth-files',
-      loading: loading && stats.authFiles === null,
-      detail: t('dashboard.oauth_credentials'),
-      badge: `${stats.authFiles ?? 0}`,
-    },
-    {
-      label: t('dashboard.available_models'),
-      value: modelsLoading ? '-' : models.length,
-      icon: <Satellite className="size-4" />,
-      path: '/system',
-      loading: modelsLoading,
-      detail: t('dashboard.available_models_desc'),
-      badge: models.length ? '+ models' : 'scan',
-    },
-  ];
   const modelPreview = models.slice(0, 6);
   const formattedDate = new Date().toLocaleDateString(i18n.language, {
     month: '2-digit',
     day: '2-digit',
   });
+
+  const metricCards: QuickStat[] = [
+    {
+      label: t('nav.dashboard'),
+      value: connectionLabel,
+      icon: <Wifi className="size-5" />,
+      path: '/',
+      loading,
+      detail: connectionStatus,
+      badge: connectionStatus === 'connected' ? 'ok' : 'off',
+    },
+    {
+      label: t('nav.api_keys', { defaultValue: 'API Keys' }),
+      value: stats.apiKeys ?? '-',
+      icon: <KeyRound className="size-5" />,
+      path: '/config',
+      loading,
+      detail: 'proxy api-keys',
+      badge: 'keys',
+    },
+    {
+      label: t('nav.auth_files'),
+      value: stats.authFiles ?? '-',
+      icon: <FileText className="size-5" />,
+      path: '/auth-files',
+      loading,
+      detail: 'auth files',
+      badge: 'auth',
+    },
+    {
+      label: t('nav.ai_providers'),
+      value: totalProviderKeys || '-',
+      icon: <Bot className="size-5" />,
+      path: '/ai-providers',
+      loading,
+      detail: 'provider keys',
+      badge: 'providers',
+    },
+  ];
 
   return (
     <div className="flex flex-col gap-6">
@@ -576,40 +373,21 @@ export function DashboardPage() {
             <CardTitle>Token 使用趋势</CardTitle>
             <CardDescription>
               {formatCompactNumber(tokenSummary.tokens.totalTokens)} tokens /{' '}
-              {formatCompactNumber(tokenSummary.requests)} requests · Keeper · {formattedDate}
+              {formatCompactNumber(tokenSummary.requests)} requests · Keeper overview.series ·{' '}
+              {formattedDate}
             </CardDescription>
-            <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-2 rounded-full bg-[#111111]" />
-                Total
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-2 rounded-full bg-[#2563eb]" />
-                Input
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-2 rounded-full bg-[#10b981]" />
-                Output
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-2 rounded-full bg-[#8b5cf6]" />
-                Reasoning
-              </span>
-            </div>
           </div>
-          <div className="inline-flex rounded-md border bg-background">
+          <div className="flex flex-wrap gap-2">
             {tokenTrendRanges.map((range) => (
-              <button
+              <Button
                 key={range.value}
                 type="button"
+                size="sm"
+                variant={tokenRange === range.value ? 'default' : 'outline'}
                 onClick={() => setTokenRange(range.value)}
-                className={cn(
-                  'h-9 border-r px-4 text-sm last:border-r-0',
-                  tokenRange === range.value && 'bg-muted font-medium'
-                )}
               >
                 {range.label}
-              </button>
+              </Button>
             ))}
           </div>
         </CardHeader>
@@ -618,99 +396,90 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
-      <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+      <section className="grid gap-4 lg:grid-cols-2">
         <Card className="rounded-xl">
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle>{t('nav.ai_providers')}</CardTitle>
-              <CardDescription>
-                {`G:${providerStats.gemini ?? '-'} C:${providerStats.codex ?? '-'} Cl:${providerStats.claude ?? '-'} O:${providerStats.openai ?? '-'}`}
-              </CardDescription>
-            </div>
-            <Button asChild variant="outline" size="sm">
-              <Link to="/ai-providers">
-                <Bot className="size-4" />
-                {t('nav.ai_providers')}
-              </Link>
-            </Button>
+          <CardHeader>
+            <CardTitle>路由 / 连接</CardTitle>
+            <CardDescription>routing strategy · session</CardDescription>
           </CardHeader>
-          <CardContent>
-            <ProviderBars
-              rows={providerRows}
-              emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
-            />
+          <CardContent className="space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              <Route className="size-4" />
+              {routingStrategyDisplay}
+            </div>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="size-4" />
+              {connectionLabel}
+            </div>
+            <div className="flex items-center gap-2">
+              <Satellite className="size-4" />
+              {apiBase || '-'}
+            </div>
           </CardContent>
         </Card>
 
         <Card className="rounded-xl">
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle>{t('dashboard.current_config')}</CardTitle>
-              <CardDescription>{connectionLabel}</CardDescription>
+              <CardTitle>可用模型</CardTitle>
+              <CardDescription>/v1/models 快照</CardDescription>
             </div>
-            <Button asChild variant="outline" size="sm">
-              <Link to="/config">
-                <Settings2 className="size-4" />
-                {t('dashboard.edit_settings')}
-              </Link>
+            <Button type="button" size="icon" variant="ghost" onClick={() => void fetchModels()}>
+              <RefreshCw className={cn('size-4', modelsLoading && 'animate-spin')} />
             </Button>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Value</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow>
-                  <TableCell className="font-medium">{t('basic_settings.debug_enable')}</TableCell>
-                  <TableCell>
-                    <Badge variant={config?.debug ? 'warning' : 'outline'} className="rounded-full">
-                      {config?.debug ? t('common.yes') : t('common.no')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right"><ShieldCheck className="ml-auto size-4" /></TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="font-medium">{t('basic_settings.logging_to_file_enable')}</TableCell>
-                  <TableCell>
-                    <Badge variant={config?.loggingToFile ? 'success' : 'outline'} className="rounded-full">
-                      {config?.loggingToFile ? t('common.yes') : t('common.no')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right"><FileText className="ml-auto size-4" /></TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="font-medium">{t('basic_settings.ws_auth_enable')}</TableCell>
-                  <TableCell>
-                    <Badge variant={config?.wsAuth ? 'success' : 'outline'} className="rounded-full">
-                      {config?.wsAuth ? t('common.yes') : t('common.no')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right"><Wifi className="ml-auto size-4" /></TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="font-medium">{t('dashboard.routing_strategy')}</TableCell>
-                  <TableCell>{routingStrategyDisplay}</TableCell>
-                  <TableCell className="text-right"><Route className="ml-auto size-4" /></TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="font-medium">{t('dashboard.available_models')}</TableCell>
-                  <TableCell>{modelPreview.map((model) => model.alias || model.name).join(', ') || '-'}</TableCell>
-                  <TableCell className="text-right">{models.length}</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
+            {modelPreview.length ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Model</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {modelPreview.map((m) => (
+                    <TableRow key={m.name}>
+                      <TableCell className="font-mono text-xs">{m.name}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                {modelsLoading ? '加载中…' : '暂无模型'}
+              </div>
+            )}
           </CardContent>
-          <CardFooter className="justify-between border-t text-sm text-muted-foreground">
-            <span>{serverVersion ? `v${serverVersion.trim().replace(/^[vV]+/, '')}` : '-'}</span>
-            <span>{serverBuildDate ? new Date(serverBuildDate).toLocaleDateString(i18n.language) : '-'}</span>
-          </CardFooter>
         </Card>
       </section>
+
+      <Card className="rounded-xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings2 className="size-4" />
+            Provider 计数
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          {[
+            { label: 'Gemini', value: providerStats.gemini, color: providerColors[0] },
+            { label: 'Codex', value: providerStats.codex, color: providerColors[1] },
+            { label: 'Claude', value: providerStats.claude, color: providerColors[2] },
+            { label: 'OpenAI-compat', value: providerStats.openai, color: providerColors[3] },
+          ].map((item) => (
+            <Badge key={item.label} variant="outline" className="rounded-full px-3 py-1">
+              <span className="mr-2 inline-block size-2 rounded-full" style={{ background: item.color }} />
+              {item.label}: {item.value ?? '—'}
+            </Badge>
+          ))}
+        </CardContent>
+        <CardFooter>
+          <Link to="/usage" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:underline">
+            <TrendingUp className="size-4" />
+            打开用量（Keeper）
+          </Link>
+        </CardFooter>
+      </Card>
     </div>
   );
 }

@@ -1,23 +1,40 @@
 /**
- * CPA Usage Keeper API client.
- * Keeper runs as a sidecar service; the panel uses its /api/v1 endpoints
- * for persisted usage analytics while keeping the shadcn UI.
+ * CPA Usage Keeper API client — thin wrapper over Keeper /api/v1 only.
+ * No client-side re-aggregation; UI maps responses as Keeper returns them.
  */
 
 import axios, { type AxiosInstance } from 'axios';
 import { getErrorMessage, isRecord } from '@/utils/helpers';
 
 const KEEPER_BASE_STORAGE_KEY = 'cpamc.keeper.baseUrl';
-const KEEPER_ENABLED_STORAGE_KEY = 'cpamc.keeper.enabled';
+
+/** Keeper-native time ranges (overview / analysis / events). */
+export type KeeperRange =
+  | '4h'
+  | '8h'
+  | '12h'
+  | '24h'
+  | 'today'
+  | 'yesterday'
+  | '7d'
+  | '30d';
+
+export const KEEPER_RANGE_OPTIONS: Array<{ value: KeeperRange; label: string }> = [
+  { value: '4h', label: '4 小时' },
+  { value: '8h', label: '8 小时' },
+  { value: '12h', label: '12 小时' },
+  { value: '24h', label: '24 小时' },
+  { value: 'today', label: '今天' },
+  { value: '7d', label: '7 天' },
+  { value: '30d', label: '30 天' },
+];
 
 /**
- * Same-origin path preferred: nginx gateway on CPA port proxies
- * `/keeper/` → Keeper service. Avoids extra open ports / CORS issues.
+ * Same-origin path: nginx on CPA port proxies `/keeper/` → Keeper.
  */
 export const detectKeeperBaseUrl = (): string => {
   if (typeof window === 'undefined') return 'http://127.0.0.1:8317/keeper';
   const { protocol, host } = window.location;
-  // e.g. http://140.245.44.107:8317/keeper
   return `${protocol}//${host}/keeper`;
 };
 
@@ -26,10 +43,7 @@ export const getStoredKeeperBaseUrl = (): string => {
     const raw = localStorage.getItem(KEEPER_BASE_STORAGE_KEY);
     if (raw && raw.trim()) {
       const normalized = raw.trim().replace(/\/+$/, '');
-      // Migrate old :18317 direct URL to same-origin /keeper
-      if (/:18317\/?$/.test(normalized)) {
-        return detectKeeperBaseUrl();
-      }
+      if (/:18317\/?$/.test(normalized)) return detectKeeperBaseUrl();
       return normalized;
     }
   } catch {
@@ -39,34 +53,8 @@ export const getStoredKeeperBaseUrl = (): string => {
 };
 
 export const setStoredKeeperBaseUrl = (value: string) => {
-  const normalized = value.trim().replace(/\/+$/, '');
-  localStorage.setItem(KEEPER_BASE_STORAGE_KEY, normalized);
+  localStorage.setItem(KEEPER_BASE_STORAGE_KEY, value.trim().replace(/\/+$/, ''));
 };
-
-export const isKeeperEnabled = (): boolean => {
-  try {
-    const raw = localStorage.getItem(KEEPER_ENABLED_STORAGE_KEY);
-    if (raw === null) return true; // default on once integrated
-    return raw === '1' || raw === 'true';
-  } catch {
-    return true;
-  }
-};
-
-export const setKeeperEnabled = (enabled: boolean) => {
-  localStorage.setItem(KEEPER_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
-};
-
-export type KeeperRange =
-  | '15m'
-  | '1h'
-  | '6h'
-  | '24h'
-  | 'today'
-  | 'yesterday'
-  | '7d'
-  | '30d'
-  | 'all';
 
 export interface KeeperTokens {
   input_tokens?: number;
@@ -136,11 +124,15 @@ export interface KeeperOverviewResponse {
     rpm?: Record<string, number>;
     tpm?: Record<string, number>;
     cost?: Record<string, number>;
+    cache_read_rate?: Record<string, number | null>;
   };
   service_health?: {
     total_success?: number;
     total_failure?: number;
     success_rate?: number;
+    rows?: number;
+    columns?: number;
+    bucket_seconds?: number;
   };
   timezone?: string;
   range_start?: string;
@@ -167,14 +159,32 @@ export interface KeeperAnalysisResponse {
   timezone?: string;
   range_start?: string;
   range_end?: string;
-  token_usage?: Array<Record<string, unknown>>;
+  token_usage?: Array<{
+    bucket?: string;
+    input_tokens?: number;
+    output_tokens?: number;
+    reasoning_tokens?: number;
+    cache_read_tokens?: number;
+    cache_creation_tokens?: number;
+    total_tokens?: number;
+    requests?: number;
+    cost_usd?: number;
+    cost_available?: boolean;
+  }>;
   api_key_composition?: KeeperCompositionItem[];
   model_composition?: KeeperCompositionItem[];
   auth_files_composition?: KeeperCompositionItem[];
   ai_provider_composition?: KeeperCompositionItem[];
   cost_breakdown?: Record<string, unknown>;
   model_efficiency?: Array<Record<string, unknown>>;
-  latency_diagnostics?: Array<Record<string, unknown>>;
+  latency_diagnostics?: {
+    points?: Array<{ ttft_ms?: number; latency_ms?: number }>;
+    p95_ttft_ms?: number;
+    p95_latency_ms?: number;
+    max_ttft_ms?: number;
+    max_latency_ms?: number;
+    total_points?: number;
+  };
 }
 
 export interface KeeperStatusResponse {
@@ -185,15 +195,6 @@ export interface KeeperStatusResponse {
   last_status?: string;
 }
 
-export interface KeeperPricingEntry {
-  model?: string;
-  input?: number;
-  output?: number;
-  cache_read?: number;
-  cache_write?: number;
-  [key: string]: unknown;
-}
-
 const createClient = (baseUrl: string): AxiosInstance =>
   axios.create({
     baseURL: `${baseUrl.replace(/\/+$/, '')}/api/v1`,
@@ -201,7 +202,6 @@ const createClient = (baseUrl: string): AxiosInstance =>
     withCredentials: true,
     headers: {
       'Content-Type': 'application/json',
-      // Keeper requires this exact value on mutating methods (PUT/POST/PATCH/DELETE).
       'X-CPA-Usage-Keeper-Request': 'fetch',
     },
   });
@@ -236,15 +236,6 @@ class KeeperApi {
     setStoredKeeperBaseUrl(this.baseUrl);
   }
 
-  async healthz(): Promise<boolean> {
-    try {
-      const res = await axios.get(`${this.baseUrl}/healthz`, { timeout: 5_000 });
-      return res.status === 200;
-    } catch {
-      return false;
-    }
-  }
-
   async getStatus(): Promise<KeeperStatusResponse> {
     try {
       const { data } = await this.client.get<KeeperStatusResponse>('/status');
@@ -254,10 +245,10 @@ class KeeperApi {
     }
   }
 
-  async getOverview(range: string, params?: Record<string, string | number>) {
+  async getOverview(range: KeeperRange) {
     try {
       const { data } = await this.client.get<KeeperOverviewResponse>('/usage/overview', {
-        params: { range, ...params },
+        params: { range },
       });
       return data;
     } catch (error) {
@@ -265,21 +256,10 @@ class KeeperApi {
     }
   }
 
-  async getOverviewRealtime(params?: Record<string, string | number>) {
-    try {
-      const { data } = await this.client.get<KeeperOverviewResponse>('/usage/overview/realtime', {
-        params,
-      });
-      return data;
-    } catch (error) {
-      throw unwrapError(error);
-    }
-  }
-
-  async getAnalysis(range: string, params?: Record<string, string | number>) {
+  async getAnalysis(range: KeeperRange) {
     try {
       const { data } = await this.client.get<KeeperAnalysisResponse>('/usage/analysis', {
-        params: { range, ...params },
+        params: { range },
       });
       return data;
     } catch (error) {
@@ -288,15 +268,13 @@ class KeeperApi {
   }
 
   async getEvents(params: {
-    range?: string;
+    range: KeeperRange;
     page?: number;
     page_size?: number;
     model?: string;
     source?: string;
     auth_index?: string;
-    api_key?: string;
-    failed?: boolean | string;
-    q?: string;
+    failed?: boolean;
   }) {
     try {
       const { data } = await this.client.get<KeeperEventsResponse>('/usage/events', {
@@ -311,37 +289,6 @@ class KeeperApi {
       throw unwrapError(error);
     }
   }
-
-  async getPricing() {
-    try {
-      const { data } = await this.client.get<{ pricing?: KeeperPricingEntry[] }>('/pricing');
-      return data.pricing ?? [];
-    } catch (error) {
-      throw unwrapError(error);
-    }
-  }
 }
 
 export const keeperApi = new KeeperApi();
-
-/**
- * Map panel time-range tabs to Keeper range query values.
- * Keeper presets: 4h, 8h, 12h, 24h, today, yesterday, 7d, 30d (+ custom).
- */
-export const mapPanelRangeToKeeper = (
-  range: '15m' | '1h' | '6h' | '24h' | 'all'
-): string => {
-  switch (range) {
-    case '15m':
-    case '1h':
-      return '4h';
-    case '6h':
-      return '8h';
-    case '24h':
-      return '24h';
-    case 'all':
-      return '30d';
-    default:
-      return '24h';
-  }
-};

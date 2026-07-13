@@ -1,5 +1,6 @@
 /**
- * Map CPA Usage Keeper API payloads into structures used by the usage analytics UI.
+ * Thin mappers: Keeper API → UI display shapes.
+ * No re-bucketing / no inventing series finer than Keeper returns.
  */
 
 import type {
@@ -35,7 +36,6 @@ export const keeperEventToUsageEvent = (event: KeeperUsageEvent): UsageEvent => 
   const totalTokens =
     numberValue(tokens.total_tokens) ||
     inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheCreationTokens;
-
   const timestampMs = Date.parse(event.timestamp || '') || Date.now();
   const failed = Boolean(event.failed);
 
@@ -81,6 +81,7 @@ export type OverviewSummary = {
   successes: number;
   failures: number;
   successRate: number;
+  /** Overview API does not expose avg latency; left 0 unless filled by analysis. */
   avgLatencyMs: number;
   avgTtftMs: number;
   p95LatencyMs: number;
@@ -90,79 +91,11 @@ export type OverviewSummary = {
   costAvailable: boolean;
   rpm: number;
   tpm: number;
+  windowMinutes: number;
+  granularityHint: string;
 };
 
-/** Average latency / TTFT from per-request event rows (preferred source). */
-export const averageLatencyFromEvents = (events: UsageEvent[]) => {
-  if (!events.length) {
-    return { avgLatencyMs: 0, avgTtftMs: 0, maxLatencyMs: 0 };
-  }
-  let latencyTotal = 0;
-  let ttftTotal = 0;
-  let maxLatencyMs = 0;
-  let latencyCount = 0;
-  let ttftCount = 0;
-  for (const event of events) {
-    if (event.latencyMs > 0) {
-      latencyTotal += event.latencyMs;
-      latencyCount += 1;
-      maxLatencyMs = Math.max(maxLatencyMs, event.latencyMs);
-    }
-    if (event.ttftMs > 0) {
-      ttftTotal += event.ttftMs;
-      ttftCount += 1;
-    }
-  }
-  return {
-    avgLatencyMs: latencyCount > 0 ? latencyTotal / latencyCount : 0,
-    avgTtftMs: ttftCount > 0 ? ttftTotal / ttftCount : 0,
-    maxLatencyMs,
-  };
-};
-
-/** Fallback averages from analysis.latency_diagnostics scatter points. */
-export const latencyFromDiagnostics = (
-  diagnostics: KeeperAnalysisResponse['latency_diagnostics'] | unknown
-) => {
-  const record = isRecordLike(diagnostics) ? diagnostics : null;
-  const points = Array.isArray(record?.points) ? record.points : [];
-  let latencyTotal = 0;
-  let ttftTotal = 0;
-  let latencyCount = 0;
-  let ttftCount = 0;
-  for (const point of points) {
-    if (!isRecordLike(point)) continue;
-    const latency = numberValue(point.latency_ms);
-    const ttft = numberValue(point.ttft_ms);
-    if (latency > 0) {
-      latencyTotal += latency;
-      latencyCount += 1;
-    }
-    if (ttft > 0) {
-      ttftTotal += ttft;
-      ttftCount += 1;
-    }
-  }
-  return {
-    avgLatencyMs: latencyCount > 0 ? latencyTotal / latencyCount : 0,
-    avgTtftMs: ttftCount > 0 ? ttftTotal / ttftCount : 0,
-    p95LatencyMs: numberValue(record?.p95_latency_ms),
-    maxLatencyMs: numberValue(record?.max_latency_ms),
-  };
-};
-
-const isRecordLike = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
-
-export const overviewToSummary = (
-  overview: KeeperOverviewResponse | null,
-  extras?: {
-    avgLatencyMs?: number;
-    avgTtftMs?: number;
-    p95LatencyMs?: number;
-    maxLatencyMs?: number;
-  }
-): OverviewSummary => {
+export const overviewToSummary = (overview: KeeperOverviewResponse | null): OverviewSummary => {
   const usage = overview?.usage;
   const summary = overview?.summary;
   const health = overview?.service_health;
@@ -176,35 +109,35 @@ export const overviewToSummary = (
         ? (successes / requests) * 100
         : 100;
 
-  const tokens: UsageTokens = {
-    inputTokens: numberValue(summary?.input_tokens),
-    outputTokens: numberValue(
-      (summary as { output_tokens?: number } | undefined)?.output_tokens
-    ),
-    reasoningTokens: numberValue(summary?.reasoning_tokens),
-    cachedTokens: 0,
-    cacheReadTokens: numberValue(summary?.cache_read_tokens),
-    cacheCreationTokens: numberValue(summary?.cache_creation_tokens),
-    totalTokens: numberValue(usage?.total_tokens ?? summary?.token_count),
-  };
-
   return {
     requests,
     successes,
     failures,
     successRate,
-    avgLatencyMs: numberValue(extras?.avgLatencyMs),
-    avgTtftMs: numberValue(extras?.avgTtftMs),
-    p95LatencyMs: numberValue(extras?.p95LatencyMs),
-    maxLatencyMs: numberValue(extras?.maxLatencyMs),
-    tokens,
+    avgLatencyMs: 0,
+    avgTtftMs: 0,
+    p95LatencyMs: 0,
+    maxLatencyMs: 0,
+    tokens: {
+      inputTokens: numberValue(summary?.input_tokens),
+      outputTokens: numberValue(summary?.output_tokens),
+      reasoningTokens: numberValue(summary?.reasoning_tokens),
+      cachedTokens: 0,
+      cacheReadTokens: numberValue(summary?.cache_read_tokens),
+      cacheCreationTokens: numberValue(summary?.cache_creation_tokens),
+      totalTokens: numberValue(usage?.total_tokens ?? summary?.token_count),
+    },
     totalCost: numberValue(summary?.total_cost),
     costAvailable: Boolean(summary?.cost_available),
     rpm: numberValue(summary?.rpm),
     tpm: numberValue(summary?.tpm),
+    windowMinutes: numberValue(summary?.window_minutes),
+    // Keeper overview series is hour-based for short windows
+    granularityHint: 'hourly',
   };
 };
 
+/** Map Keeper overview.series maps exactly (hour/day keys as returned). */
 export const overviewSeriesToTokenSeries = (
   overview: KeeperOverviewResponse | null
 ): TokenSeriesPoint[] => {
@@ -215,7 +148,9 @@ export const overviewSeriesToTokenSeries = (
   return keys.map((key) => {
     const timestampMs = Date.parse(key) || 0;
     const label = Number.isFinite(timestampMs)
-      ? new Date(timestampMs).toLocaleTimeString(undefined, {
+      ? new Date(timestampMs).toLocaleString(undefined, {
+          month: '2-digit',
+          day: '2-digit',
           hour: '2-digit',
           minute: '2-digit',
         })
@@ -232,94 +167,31 @@ export const overviewSeriesToTokenSeries = (
   });
 };
 
-const RANGE_MS: Record<'15m' | '1h' | '6h' | '24h' | 'all', number> = {
-  '15m': 15 * 60 * 1000,
-  '1h': 4 * 60 * 60 * 1000, // maps to Keeper 4h
-  '6h': 8 * 60 * 60 * 1000, // maps to Keeper 8h
-  '24h': 24 * 60 * 60 * 1000,
-  all: 30 * 24 * 60 * 60 * 1000,
-};
-
-const SERIES_BUCKET_MS: Record<'15m' | '1h' | '6h' | '24h' | 'all', number> = {
-  '15m': 60 * 1000,
-  '1h': 5 * 60 * 1000,
-  '6h': 15 * 60 * 1000,
-  '24h': 30 * 60 * 1000,
-  all: 6 * 60 * 60 * 1000,
-};
-
-/**
- * Build a multi-bucket token curve from event rows.
- * Prefer this over overview.series when Keeper only returns a single coarse bucket
- * (common for short retention / single-hour traffic).
- */
-export const buildTokenSeriesFromEvents = (
-  events: UsageEvent[],
-  range: '15m' | '1h' | '6h' | '24h' | 'all',
-  nowMs = Date.now()
+/** Prefer analysis.token_usage when present (same hourly/daily as Keeper analysis). */
+export const analysisTokenUsageToSeries = (
+  analysis: KeeperAnalysisResponse | null
 ): TokenSeriesPoint[] => {
-  const spanMs = RANGE_MS[range] ?? RANGE_MS['24h'];
-  const bucketMs = SERIES_BUCKET_MS[range] ?? SERIES_BUCKET_MS['24h'];
-  const endMs = nowMs;
-  const startMs = endMs - spanMs;
-  const firstBucket = Math.floor(startMs / bucketMs) * bucketMs;
-  const lastBucket = Math.floor(endMs / bucketMs) * bucketMs;
-  const bucketCount = Math.max(1, Math.floor((lastBucket - firstBucket) / bucketMs) + 1);
-
-  const buckets: TokenSeriesPoint[] = Array.from({ length: bucketCount }, (_, index) => {
-    const timestampMs = firstBucket + index * bucketMs;
+  const rows = analysis?.token_usage ?? [];
+  return rows.map((row) => {
+    const key = String(row.bucket ?? '');
+    const timestampMs = Date.parse(key) || 0;
     return {
       timestampMs,
-      label: new Date(timestampMs).toLocaleTimeString(undefined, {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      totalTokens: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningTokens: 0,
-      requests: 0,
+      label: Number.isFinite(timestampMs)
+        ? new Date(timestampMs).toLocaleString(undefined, {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : key,
+      totalTokens: numberValue(row.total_tokens),
+      inputTokens: numberValue(row.input_tokens),
+      outputTokens: numberValue(row.output_tokens),
+      reasoningTokens: numberValue(row.reasoning_tokens),
+      requests: numberValue(row.requests),
     };
   });
-
-  for (const event of events) {
-    if (event.timestampMs < startMs || event.timestampMs > endMs + bucketMs) continue;
-    const index = Math.floor((event.timestampMs - firstBucket) / bucketMs);
-    if (index < 0 || index >= buckets.length) continue;
-    const bucket = buckets[index];
-    bucket.requests += 1;
-    bucket.totalTokens += event.tokens.totalTokens;
-    bucket.inputTokens += event.tokens.inputTokens;
-    bucket.outputTokens += event.tokens.outputTokens;
-    bucket.reasoningTokens += event.tokens.reasoningTokens;
-  }
-
-  return buckets;
-};
-
-/** Prefer event-based series when it has more temporal resolution than overview. */
-export const pickTokenSeries = (
-  overview: KeeperOverviewResponse | null,
-  events: UsageEvent[],
-  range: '15m' | '1h' | '6h' | '24h' | 'all'
-): TokenSeriesPoint[] => {
-  const fromEvents = buildTokenSeriesFromEvents(events, range);
-  const fromOverview = overviewSeriesToTokenSeries(overview);
-  const eventActive = fromEvents.filter((p) => p.requests > 0).length;
-  const overviewActive = fromOverview.filter((p) => p.requests > 0).length;
-
-  // Overview often collapses everything into 1 hourly bucket → flat/static chart.
-  if (eventActive >= 2 || fromEvents.length > fromOverview.length) {
-    return fromEvents;
-  }
-  if (overviewActive >= 1 && fromOverview.length >= 2) {
-    return fromOverview;
-  }
-  // Single overview bucket still worse than a filled event timeline
-  if (fromEvents.some((p) => p.requests > 0)) {
-    return fromEvents;
-  }
-  return fromOverview;
 };
 
 const compositionToGroups = (
@@ -345,6 +217,7 @@ export const analysisToDistributions = (analysis: KeeperAnalysisResponse | null)
   providers: compositionToGroups(analysis?.ai_provider_composition),
   apiKeys: compositionToGroups(analysis?.api_key_composition),
   authFiles: compositionToGroups(analysis?.auth_files_composition),
+  granularity: analysis?.granularity || 'hourly',
 });
 
 export const analysisToCostGroups = (analysis: KeeperAnalysisResponse | null) => {
@@ -368,6 +241,17 @@ export const analysisToCostGroups = (analysis: KeeperAnalysisResponse | null) =>
   };
 };
 
+export const latencyFromDiagnostics = (analysis: KeeperAnalysisResponse | null) => {
+  const d = analysis?.latency_diagnostics;
+  return {
+    p95LatencyMs: numberValue(d?.p95_latency_ms),
+    p95TtftMs: numberValue(d?.p95_ttft_ms),
+    maxLatencyMs: numberValue(d?.max_latency_ms),
+    maxTtftMs: numberValue(d?.max_ttft_ms),
+    totalPoints: numberValue(d?.total_points),
+  };
+};
+
 export const emptyOverviewSummary = (): OverviewSummary => ({
   requests: 0,
   successes: 0,
@@ -382,4 +266,6 @@ export const emptyOverviewSummary = (): OverviewSummary => ({
   costAvailable: false,
   rpm: 0,
   tpm: 0,
+  windowMinutes: 0,
+  granularityHint: 'hourly',
 });

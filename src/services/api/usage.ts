@@ -1,47 +1,30 @@
 import { apiClient } from './client';
-import {
-  keeperApi,
-  mapPanelRangeToKeeper,
-  type KeeperAnalysisResponse,
-  type KeeperEventsResponse,
-  type KeeperOverviewResponse,
-} from './keeper';
+import { keeperApi, type KeeperRange } from './keeper';
 
 const USAGE_QUEUE_TIMEOUT_MS = 15 * 1000;
 
 /**
- * Legacy CPA in-memory queue pop. Prefer Keeper APIs for analytics —
- * multiple consumers will steal events from each other.
+ * Legacy CPA in-memory queue pop — do not use for analytics (steals Keeper feed).
  */
 export const usageApi = {
-  /** @deprecated Prefer Keeper overview/events. Destructive pop of CPA usage-queue. */
+  /** @deprecated Destructive pop of CPA usage-queue. */
   getQueue: (count = 200) =>
     apiClient.get<unknown[]>('/usage-queue', {
       params: { count },
       timeout: USAGE_QUEUE_TIMEOUT_MS,
     }),
 
-  getKeeperOverview: (range: '15m' | '1h' | '6h' | '24h' | 'all') =>
-    keeperApi.getOverview(mapPanelRangeToKeeper(range)) as Promise<KeeperOverviewResponse>,
+  /** Keeper overview only (totals + hour/day series). */
+  getKeeperOverview: (range: KeeperRange) => keeperApi.getOverview(range),
 
-  getKeeperAnalysis: (range: '15m' | '1h' | '6h' | '24h' | 'all') =>
-    keeperApi.getAnalysis(mapPanelRangeToKeeper(range)) as Promise<KeeperAnalysisResponse>,
+  /** Keeper analysis only (composition, cost, latency diagnostics, token_usage). */
+  getKeeperAnalysis: (range: KeeperRange) => keeperApi.getAnalysis(range),
 
+  /** Keeper events only (request-level list). */
   getKeeperEvents: (params: {
-    range: '15m' | '1h' | '6h' | '24h' | 'all';
+    range: KeeperRange;
     page?: number;
     page_size?: number;
     failed?: boolean;
-    q?: string;
-  }) =>
-    keeperApi.getEvents({
-      range: mapPanelRangeToKeeper(params.range),
-      page: params.page ?? 1,
-      page_size: params.page_size ?? 50,
-      failed: params.failed,
-      q: params.q,
-    }) as Promise<KeeperEventsResponse>,
-
-  getKeeperHealth: () => keeperApi.healthz(),
-  getKeeperStatus: () => keeperApi.getStatus(),
+  }) => keeperApi.getEvents(params),
 };
