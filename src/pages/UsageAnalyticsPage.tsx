@@ -51,8 +51,10 @@ import { downloadBlob } from '@/utils/download';
 import {
   analysisToCostGroups,
   analysisToDistributions,
+  averageLatencyFromEvents,
   emptyOverviewSummary,
   keeperEventsToUsageEvents,
+  latencyFromDiagnostics,
   overviewSeriesToTokenSeries,
   overviewToSummary,
 } from '@/utils/keeperAdapters';
@@ -788,7 +790,17 @@ export function UsageAnalyticsPage() {
         }),
       ]);
 
-      const summaryNext = overviewToSummary(overview);
+      const mappedEvents = keeperEventsToUsageEvents(eventsRes.events);
+      // overview 不含平均延迟；用事件明细优先，analysis.latency_diagnostics 兜底
+      const fromEvents = averageLatencyFromEvents(mappedEvents);
+      const fromDiag = latencyFromDiagnostics(analysis.latency_diagnostics);
+      const summaryNext = overviewToSummary(overview, {
+        avgLatencyMs: fromEvents.avgLatencyMs || fromDiag.avgLatencyMs,
+        avgTtftMs: fromEvents.avgTtftMs || fromDiag.avgTtftMs,
+        p95LatencyMs: fromDiag.p95LatencyMs,
+        maxLatencyMs:
+          fromEvents.maxLatencyMs || fromDiag.maxLatencyMs || fromDiag.p95LatencyMs,
+      });
       setOverviewSummary(summaryNext);
       setTokenSeries(overviewSeriesToTokenSeries(overview));
 
@@ -802,7 +814,7 @@ export function UsageAnalyticsPage() {
       setCostByApiKey(costs.byApiKey);
       setCostByAccount(costs.byAccount);
 
-      setEvents(keeperEventsToUsageEvents(eventsRes.events));
+      setEvents(mappedEvents);
       setLastLoadedAt(Date.now());
       setError('');
     } catch (err: unknown) {
@@ -1032,7 +1044,15 @@ export function UsageAnalyticsPage() {
           title={t('usage.avg_latency', { defaultValue: '平均延迟' })}
           value={formatDuration(summary.avgLatencyMs)}
           subtitle={`TTFT ${formatDuration(summary.avgTtftMs)} / ${topModel}`}
-          badge={latencyRanking[0] ? formatDuration(latencyRanking[0].maxLatencyMs) : '0ms'}
+          badge={
+            summary.p95LatencyMs > 0
+              ? `P95 ${formatDuration(summary.p95LatencyMs)}`
+              : summary.maxLatencyMs > 0
+                ? `max ${formatDuration(summary.maxLatencyMs)}`
+                : latencyRanking[0]
+                  ? formatDuration(latencyRanking[0].maxLatencyMs)
+                  : '0ms'
+          }
           icon={<Clock className="size-5" />}
         />
         <MetricCard

@@ -76,7 +76,93 @@ export const keeperEventToUsageEvent = (event: KeeperUsageEvent): UsageEvent => 
 export const keeperEventsToUsageEvents = (events: KeeperUsageEvent[] | undefined): UsageEvent[] =>
   (events ?? []).map(keeperEventToUsageEvent);
 
-export const overviewToSummary = (overview: KeeperOverviewResponse | null) => {
+export type OverviewSummary = {
+  requests: number;
+  successes: number;
+  failures: number;
+  successRate: number;
+  avgLatencyMs: number;
+  avgTtftMs: number;
+  p95LatencyMs: number;
+  maxLatencyMs: number;
+  tokens: UsageTokens;
+  totalCost: number;
+  costAvailable: boolean;
+  rpm: number;
+  tpm: number;
+};
+
+/** Average latency / TTFT from per-request event rows (preferred source). */
+export const averageLatencyFromEvents = (events: UsageEvent[]) => {
+  if (!events.length) {
+    return { avgLatencyMs: 0, avgTtftMs: 0, maxLatencyMs: 0 };
+  }
+  let latencyTotal = 0;
+  let ttftTotal = 0;
+  let maxLatencyMs = 0;
+  let latencyCount = 0;
+  let ttftCount = 0;
+  for (const event of events) {
+    if (event.latencyMs > 0) {
+      latencyTotal += event.latencyMs;
+      latencyCount += 1;
+      maxLatencyMs = Math.max(maxLatencyMs, event.latencyMs);
+    }
+    if (event.ttftMs > 0) {
+      ttftTotal += event.ttftMs;
+      ttftCount += 1;
+    }
+  }
+  return {
+    avgLatencyMs: latencyCount > 0 ? latencyTotal / latencyCount : 0,
+    avgTtftMs: ttftCount > 0 ? ttftTotal / ttftCount : 0,
+    maxLatencyMs,
+  };
+};
+
+/** Fallback averages from analysis.latency_diagnostics scatter points. */
+export const latencyFromDiagnostics = (
+  diagnostics: KeeperAnalysisResponse['latency_diagnostics'] | unknown
+) => {
+  const record = isRecordLike(diagnostics) ? diagnostics : null;
+  const points = Array.isArray(record?.points) ? record.points : [];
+  let latencyTotal = 0;
+  let ttftTotal = 0;
+  let latencyCount = 0;
+  let ttftCount = 0;
+  for (const point of points) {
+    if (!isRecordLike(point)) continue;
+    const latency = numberValue(point.latency_ms);
+    const ttft = numberValue(point.ttft_ms);
+    if (latency > 0) {
+      latencyTotal += latency;
+      latencyCount += 1;
+    }
+    if (ttft > 0) {
+      ttftTotal += ttft;
+      ttftCount += 1;
+    }
+  }
+  return {
+    avgLatencyMs: latencyCount > 0 ? latencyTotal / latencyCount : 0,
+    avgTtftMs: ttftCount > 0 ? ttftTotal / ttftCount : 0,
+    p95LatencyMs: numberValue(record?.p95_latency_ms),
+    maxLatencyMs: numberValue(record?.max_latency_ms),
+  };
+};
+
+const isRecordLike = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export const overviewToSummary = (
+  overview: KeeperOverviewResponse | null,
+  extras?: {
+    avgLatencyMs?: number;
+    avgTtftMs?: number;
+    p95LatencyMs?: number;
+    maxLatencyMs?: number;
+  }
+): OverviewSummary => {
   const usage = overview?.usage;
   const summary = overview?.summary;
   const health = overview?.service_health;
@@ -107,8 +193,10 @@ export const overviewToSummary = (overview: KeeperOverviewResponse | null) => {
     successes,
     failures,
     successRate,
-    avgLatencyMs: 0,
-    avgTtftMs: 0,
+    avgLatencyMs: numberValue(extras?.avgLatencyMs),
+    avgTtftMs: numberValue(extras?.avgTtftMs),
+    p95LatencyMs: numberValue(extras?.p95LatencyMs),
+    maxLatencyMs: numberValue(extras?.maxLatencyMs),
     tokens,
     totalCost: numberValue(summary?.total_cost),
     costAvailable: Boolean(summary?.cost_available),
@@ -190,13 +278,15 @@ export const analysisToCostGroups = (analysis: KeeperAnalysisResponse | null) =>
   };
 };
 
-export const emptyOverviewSummary = () => ({
+export const emptyOverviewSummary = (): OverviewSummary => ({
   requests: 0,
   successes: 0,
   failures: 0,
   successRate: 100,
   avgLatencyMs: 0,
   avgTtftMs: 0,
+  p95LatencyMs: 0,
+  maxLatencyMs: 0,
   tokens: emptyTokens(),
   totalCost: 0,
   costAvailable: false,
