@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -36,17 +36,13 @@ import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { cn } from '@/lib/utils';
 import {
-  buildTokenSeries,
-  filterUsageEventsByRange,
+  emptyOverviewSummary,
+  overviewSeriesToTokenSeries,
+  overviewToSummary,
+} from '@/utils/keeperAdapters';
+import {
   formatCompactNumber,
-  getUsageStorageKey,
-  loadStoredUsageEvents,
-  mergeUsageEvents,
-  normalizeUsageEvents,
-  saveStoredUsageEvents,
-  summarizeUsageEvents,
   type TokenSeriesPoint,
-  type UsageEvent,
   type UsageTimeRange,
 } from '@/utils/usageAnalytics';
 
@@ -336,12 +332,23 @@ export function DashboardPage() {
     claude: null,
     openai: null,
   });
-  const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
   const [tokenRange, setTokenRange] = useLocalStorage<UsageTimeRange>('usageAnalytics.range', '1h');
   const [usageLoading, setUsageLoading] = useState(false);
+  const [tokenSeries, setTokenSeries] = useState<TokenSeriesPoint[]>([]);
+  const [tokenSummary, setTokenSummary] = useState(() => {
+    const s = emptyOverviewSummary();
+    return {
+      requests: s.requests,
+      successes: s.successes,
+      failures: s.failures,
+      successRate: s.successRate,
+      avgLatencyMs: s.avgLatencyMs,
+      avgTtftMs: s.avgTtftMs,
+      tokens: s.tokens,
+    };
+  });
   const [loading, setLoading] = useState(true);
   const apiKeysCache = useRef<string[]>([]);
-  const usageStorageKey = useMemo(() => getUsageStorageKey(apiBase), [apiBase]);
 
   useEffect(() => {
     apiKeysCache.current = [];
@@ -421,8 +428,6 @@ export function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const storedEvents = loadStoredUsageEvents(usageStorageKey);
-    setUsageEvents(storedEvents);
 
     const fetchUsage = async () => {
       if (connectionStatus !== 'connected') {
@@ -432,18 +437,32 @@ export function DashboardPage() {
 
       setUsageLoading(true);
       try {
-        const payload = await usageApi.getQueue(300);
-        if (!cancelled) {
-          const mergedEvents = mergeUsageEvents(
-            loadStoredUsageEvents(usageStorageKey),
-            normalizeUsageEvents(payload)
-          );
-          saveStoredUsageEvents(usageStorageKey, mergedEvents);
-          setUsageEvents(mergedEvents);
-        }
+        const overview = await usageApi.getKeeperOverview(tokenRange);
+        if (cancelled) return;
+        const summary = overviewToSummary(overview);
+        setTokenSummary({
+          requests: summary.requests,
+          successes: summary.successes,
+          failures: summary.failures,
+          successRate: summary.successRate,
+          avgLatencyMs: summary.avgLatencyMs,
+          avgTtftMs: summary.avgTtftMs,
+          tokens: summary.tokens,
+        });
+        setTokenSeries(trimTrailingEmptyTokenBuckets(overviewSeriesToTokenSeries(overview)));
       } catch {
         if (!cancelled) {
-          setUsageEvents(loadStoredUsageEvents(usageStorageKey));
+          const empty = emptyOverviewSummary();
+          setTokenSummary({
+            requests: empty.requests,
+            successes: empty.successes,
+            failures: empty.failures,
+            successRate: empty.successRate,
+            avgLatencyMs: empty.avgLatencyMs,
+            avgTtftMs: empty.avgTtftMs,
+            tokens: empty.tokens,
+          });
+          setTokenSeries([]);
         }
       } finally {
         if (!cancelled) {
@@ -457,7 +476,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [connectionStatus, usageStorageKey]);
+  }, [connectionStatus, tokenRange]);
 
   const providerStatsReady =
     providerStats.gemini !== null &&
@@ -485,18 +504,7 @@ export function DashboardPage() {
         ? 'common.connecting'
         : 'common.disconnected'
   );
-  const filteredUsageEvents = useMemo(
-    () => filterUsageEventsByRange(usageEvents, tokenRange),
-    [usageEvents, tokenRange]
-  );
-  const tokenSeries = useMemo(
-    () => trimTrailingEmptyTokenBuckets(buildTokenSeries(filteredUsageEvents, tokenRange)),
-    [filteredUsageEvents, tokenRange]
-  );
-  const tokenSummary = useMemo(
-    () => summarizeUsageEvents(filteredUsageEvents),
-    [filteredUsageEvents]
-  );
+
   const providerRows = [
     { label: 'Gemini', value: providerStats.gemini, color: providerColors[0] },
     { label: 'Codex', value: providerStats.codex, color: providerColors[1] },
@@ -560,7 +568,8 @@ export function DashboardPage() {
           <div>
             <CardTitle>Token 使用趋势</CardTitle>
             <CardDescription>
-              {formatCompactNumber(tokenSummary.tokens.totalTokens)} tokens / {formatCompactNumber(tokenSummary.requests)} requests · usage-queue · {formattedDate}
+              {formatCompactNumber(tokenSummary.tokens.totalTokens)} tokens /{' '}
+              {formatCompactNumber(tokenSummary.requests)} requests · Keeper · {formattedDate}
             </CardDescription>
             <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">

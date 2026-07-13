@@ -39,33 +39,30 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useInterval } from '@/hooks/useInterval';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { logsApi, usageApi } from '@/services/api';
+import {
+  getStoredKeeperBaseUrl,
+  keeperApi,
+  logsApi,
+  setStoredKeeperBaseUrl,
+  usageApi,
+} from '@/services/api';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import { downloadBlob } from '@/utils/download';
 import {
-  buildTokenSeries,
-  DEFAULT_MODEL_PRICES,
-  estimateEventCost,
+  analysisToCostGroups,
+  analysisToDistributions,
+  emptyOverviewSummary,
+  keeperEventsToUsageEvents,
+  overviewSeriesToTokenSeries,
+  overviewToSummary,
+} from '@/utils/keeperAdapters';
+import {
   exportUsageEventsJsonl,
-  filterUsageEvents,
-  filterUsageEventsByRange,
   formatCompactNumber,
   formatDuration,
   formatUsd,
   getFailedUsageEvents,
-  getModelPricesStorageKey,
-  getUsageStorageKey,
-  groupUsageEvents,
-  groupUsageEventsWithCost,
-  loadModelPrices,
-  loadStoredUsageEvents,
-  mergeUsageEvents,
-  normalizeUsageEvents,
   rankUsageLatency,
-  saveStoredUsageEvents,
-  summarizeUsageCost,
-  summarizeUsageEvents,
-  type ModelPriceEntry,
   type TokenSeriesPoint,
   type UsageEvent,
   type UsageGroup,
@@ -73,18 +70,16 @@ import {
 } from '@/utils/usageAnalytics';
 import { cn } from '@/lib/utils';
 
-const POLL_INTERVAL_MS = 5000;
-const USAGE_QUEUE_COUNT = 300;
-const RECENT_REQUEST_LIMIT = 40;
+const POLL_INTERVAL_MS = 10_000;
+const RECENT_REQUEST_LIMIT = 50;
 
 type UsageViewMode = 'overview' | 'monitoring' | 'cost';
 
 const timeRangeOptions: Array<{ value: UsageTimeRange; labelKey: string; fallback: string }> = [
-  { value: '15m', labelKey: 'usage.range_15m', fallback: '15 分钟' },
-  { value: '1h', labelKey: 'usage.range_1h', fallback: '1 小时' },
-  { value: '6h', labelKey: 'usage.range_6h', fallback: '6 小时' },
+  { value: '1h', labelKey: 'usage.range_1h', fallback: '近 4 小时' },
+  { value: '6h', labelKey: 'usage.range_6h', fallback: '近 8 小时' },
   { value: '24h', labelKey: 'usage.range_24h', fallback: '24 小时' },
-  { value: 'all', labelKey: 'usage.range_all', fallback: '全部' },
+  { value: 'all', labelKey: 'usage.range_all', fallback: '30 天' },
 ];
 
 const chartPalette = ['#0f172a', '#2563eb', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444'];
@@ -142,8 +137,6 @@ const formatTime = (timestampMs: number, locale: string) => {
     second: '2-digit',
   });
 };
-
-const compactLabel = (value: string, fallback = 'unknown') => value.trim() || fallback;
 
 const emptyBars = [
   { label: 'Gemini', width: 78 },
@@ -574,7 +567,6 @@ function RecentEventsTable({
   locale,
   emptyText,
   onDownload,
-  prices,
   showCost = false,
   showFailBody = false,
 }: {
@@ -582,7 +574,6 @@ function RecentEventsTable({
   locale: string;
   emptyText: string;
   onDownload: (event: UsageEvent) => void;
-  prices?: ModelPriceEntry[];
   showCost?: boolean;
   showFailBody?: boolean;
 }) {
@@ -646,9 +637,7 @@ function RecentEventsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {events.map((event) => {
-            const cost = prices ? estimateEventCost(event, prices) : null;
-            return (
+          {events.map((event) => (
               <TableRow key={event.id}>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {formatTime(event.timestampMs, locale)}
@@ -694,7 +683,7 @@ function RecentEventsTable({
                 </TableCell>
                 {showCost ? (
                   <TableCell className="text-right font-mono">
-                    {cost?.priced ? formatUsd(cost.totalCost) : '—'}
+                    {event.costAvailable ? formatUsd(event.costUsd ?? 0) : '—'}
                   </TableCell>
                 ) : null}
                 <TableCell className="text-right font-mono">
@@ -713,8 +702,7 @@ function RecentEventsTable({
                   </Button>
                 </TableCell>
               </TableRow>
-            );
-          })}
+          ))}
         </TableBody>
       </Table>
     </div>
@@ -723,9 +711,8 @@ function RecentEventsTable({
 
 export function UsageAnalyticsPage() {
   const { t, i18n } = useTranslation();
-  const { showConfirmation, showNotification } = useNotificationStore();
+  const { showNotification } = useNotificationStore();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
-  const apiBase = useAuthStore((state) => state.apiBase);
   const config = useConfigStore((state) => state.config);
   const [range, setRange] = useLocalStorage<UsageTimeRange>('usageAnalytics.range', '1h');
   const [autoRefresh, setAutoRefresh] = useLocalStorage('usageAnalytics.autoRefresh', true);
@@ -735,140 +722,127 @@ export function UsageAnalyticsPage() {
     'all'
   );
   const [monitorQuery, setMonitorQuery] = useState('');
+  const [keeperBaseInput, setKeeperBaseInput] = useState(() => getStoredKeeperBaseUrl());
   const [events, setEvents] = useState<UsageEvent[]>([]);
-  const [prices, setPrices] = useState<ModelPriceEntry[]>(DEFAULT_MODEL_PRICES);
+  const [overviewSummary, setOverviewSummary] = useState(emptyOverviewSummary);
+  const [tokenSeries, setTokenSeries] = useState<TokenSeriesPoint[]>([]);
+  const [modelDistribution, setModelDistribution] = useState<UsageGroup[]>([]);
+  const [providerDistribution, setProviderDistribution] = useState<UsageGroup[]>([]);
+  const [endpointDistribution, setEndpointDistribution] = useState<UsageGroup[]>([]);
+  const [costByModel, setCostByModel] = useState<
+    Array<{ label: string; requests: number; totalTokens: number; cost: number; failures: number }>
+  >([]);
+  const [costByProvider, setCostByProvider] = useState<
+    Array<{ label: string; requests: number; totalTokens: number; cost: number; failures: number }>
+  >([]);
+  const [costByApiKey, setCostByApiKey] = useState<
+    Array<{ label: string; requests: number; totalTokens: number; cost: number; failures: number }>
+  >([]);
+  const [costByAccount, setCostByAccount] = useState<
+    Array<{ label: string; requests: number; totalTokens: number; cost: number; failures: number }>
+  >([]);
+  const [keeperOnline, setKeeperOnline] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
-  const [storageHydrated, setStorageHydrated] = useState(false);
-  const hydratedStorageKeyRef = useRef('');
   const requestInFlightRef = useRef(false);
 
-  const storageKey = useMemo(() => getUsageStorageKey(apiBase), [apiBase]);
-  const pricesStorageKey = useMemo(() => getModelPricesStorageKey(apiBase), [apiBase]);
   const usageStatisticsEnabled = config?.raw?.['usage-statistics-enabled'];
   const usageDisabled = usageStatisticsEnabled === false;
 
-  useEffect(() => {
-    let cancelled = false;
-    setStorageHydrated(false);
-    window.queueMicrotask(() => {
-      if (cancelled) return;
-      setEvents(loadStoredUsageEvents(storageKey));
-      setPrices(loadModelPrices(pricesStorageKey));
-      setLastLoadedAt(null);
-      setError('');
-      hydratedStorageKeyRef.current = storageKey;
-      setStorageHydrated(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [pricesStorageKey, storageKey]);
-
-  useEffect(() => {
-    if (!storageHydrated) return;
-    if (hydratedStorageKeyRef.current !== storageKey) return;
-    saveStoredUsageEvents(storageKey, events);
-  }, [events, storageHydrated, storageKey]);
-
-  const loadUsageQueue = useCallback(async () => {
+  const loadKeeperData = useCallback(async () => {
     if (connectionStatus !== 'connected') return;
     if (requestInFlightRef.current) return;
 
     requestInFlightRef.current = true;
     setLoading(true);
     try {
-      const payload = await usageApi.getQueue(USAGE_QUEUE_COUNT);
-      const incoming = normalizeUsageEvents(payload);
-      setEvents((current) => mergeUsageEvents(current, incoming));
+      const healthy = await usageApi.getKeeperHealth();
+      setKeeperOnline(healthy);
+      if (!healthy) {
+        throw new Error(
+          t('usage.keeper_offline', {
+            defaultValue: 'CPA Usage Keeper 不可用，请确认 :18317 服务已启动',
+          })
+        );
+      }
+
+      const failedFilter =
+        viewMode === 'monitoring'
+          ? monitorStatus === 'failed'
+            ? true
+            : monitorStatus === 'success'
+              ? false
+              : undefined
+          : undefined;
+
+      const [overview, analysis, eventsRes] = await Promise.all([
+        usageApi.getKeeperOverview(range),
+        usageApi.getKeeperAnalysis(range),
+        usageApi.getKeeperEvents({
+          range,
+          page: 1,
+          page_size: 50,
+          failed: failedFilter,
+          q: viewMode === 'monitoring' && monitorQuery.trim() ? monitorQuery.trim() : undefined,
+        }),
+      ]);
+
+      const summaryNext = overviewToSummary(overview);
+      setOverviewSummary(summaryNext);
+      setTokenSeries(overviewSeriesToTokenSeries(overview));
+
+      const distributions = analysisToDistributions(analysis);
+      setModelDistribution(distributions.models);
+      setProviderDistribution(distributions.providers);
+      setEndpointDistribution(distributions.apiKeys);
+      const costs = analysisToCostGroups(analysis);
+      setCostByModel(costs.byModel);
+      setCostByProvider(costs.byProvider);
+      setCostByApiKey(costs.byApiKey);
+      setCostByAccount(costs.byAccount);
+
+      setEvents(keeperEventsToUsageEvents(eventsRes.events));
       setLastLoadedAt(Date.now());
       setError('');
     } catch (err: unknown) {
+      setKeeperOnline(false);
       setError(getErrorMessage(err) || t('usage.load_failed', { defaultValue: '加载统计数据失败' }));
     } finally {
       setLoading(false);
       requestInFlightRef.current = false;
     }
-  }, [connectionStatus, t]);
+  }, [connectionStatus, monitorQuery, monitorStatus, range, t, viewMode]);
 
-  useHeaderRefresh(() => loadUsageQueue());
+  useHeaderRefresh(() => loadKeeperData());
 
   useEffect(() => {
     if (connectionStatus !== 'connected') return;
     const id = window.setTimeout(() => {
-      void loadUsageQueue();
+      void loadKeeperData();
     }, 0);
     return () => window.clearTimeout(id);
-  }, [connectionStatus, loadUsageQueue]);
+  }, [connectionStatus, loadKeeperData]);
 
   useInterval(
     () => {
-      void loadUsageQueue();
+      void loadKeeperData();
     },
     autoRefresh && connectionStatus === 'connected' ? POLL_INTERVAL_MS : null
   );
 
-  const rangedEvents = useMemo(() => filterUsageEventsByRange(events, range), [events, range]);
-  const filteredEvents = useMemo(
-    () =>
-      filterUsageEvents(rangedEvents, {
-        status: viewMode === 'monitoring' ? monitorStatus : 'all',
-        query: viewMode === 'monitoring' ? monitorQuery : '',
-      }),
-    [monitorQuery, monitorStatus, rangedEvents, viewMode]
-  );
-  const summary = useMemo(() => summarizeUsageEvents(filteredEvents), [filteredEvents]);
-  const costSummary = useMemo(() => summarizeUsageCost(filteredEvents, prices), [filteredEvents, prices]);
-  const tokenSeries = useMemo(() => buildTokenSeries(filteredEvents, range), [filteredEvents, range]);
+  const filteredEvents = events;
+  const summary = overviewSummary;
+  const costSummary = {
+    totalCost: overviewSummary.totalCost,
+    inputCost: 0,
+    outputCost: 0,
+    cacheCost: 0,
+    reasoningCost: 0,
+    pricedRequests: overviewSummary.costAvailable ? overviewSummary.requests : 0,
+    unpricedRequests: overviewSummary.costAvailable ? 0 : overviewSummary.requests,
+  };
   const latencyRanking = useMemo(() => rankUsageLatency(filteredEvents), [filteredEvents]);
-  const modelDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.alias || event.model), 8),
-    [filteredEvents]
-  );
-  const providerDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.provider), 8),
-    [filteredEvents]
-  );
-  const endpointDistribution = useMemo(
-    () => groupUsageEvents(filteredEvents, (event) => compactLabel(event.endpoint), 8),
-    [filteredEvents]
-  );
-  const costByModel = useMemo(
-    () =>
-      groupUsageEventsWithCost(
-        filteredEvents,
-        prices,
-        (event) => compactLabel(event.alias || event.model),
-        12
-      ),
-    [filteredEvents, prices]
-  );
-  const costByProvider = useMemo(
-    () =>
-      groupUsageEventsWithCost(filteredEvents, prices, (event) => compactLabel(event.provider), 12),
-    [filteredEvents, prices]
-  );
-  const costByApiKey = useMemo(
-    () =>
-      groupUsageEventsWithCost(
-        filteredEvents,
-        prices,
-        (event) => compactLabel(event.apiKey || 'unknown-key'),
-        12
-      ),
-    [filteredEvents, prices]
-  );
-  const costByAccount = useMemo(
-    () =>
-      groupUsageEventsWithCost(
-        filteredEvents,
-        prices,
-        (event) => compactLabel(event.authIndex || event.apiKey || 'unknown'),
-        12
-      ),
-    [filteredEvents, prices]
-  );
   const failedEvents = useMemo(() => getFailedUsageEvents(filteredEvents), [filteredEvents]);
   const recentEvents = useMemo(
     () =>
@@ -878,20 +852,29 @@ export function UsageAnalyticsPage() {
   const disableControls = connectionStatus !== 'connected';
   const failureRate = Math.max(0, 100 - summary.successRate);
   const topModel = modelDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
-  const topProvider = providerDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
+  const topProvider =
+    providerDistribution[0]?.label ?? t('usage.empty_short', { defaultValue: '暂无数据' });
+
+  const applyKeeperBase = () => {
+    const next = keeperBaseInput.trim().replace(/\/+$/, '');
+    if (!next) return;
+    setStoredKeeperBaseUrl(next);
+    keeperApi.setBaseUrl(next);
+    showNotification(
+      t('usage.keeper_base_saved', { defaultValue: 'Keeper 地址已保存' }),
+      'success'
+    );
+    void loadKeeperData();
+  };
 
   const clearEvents = () => {
-    showConfirmation({
-      title: t('usage.clear_title', { defaultValue: '清空统计缓存' }),
-      message: t('usage.clear_confirm', { defaultValue: '确定要清空当前浏览器保存的统计数据吗？' }),
-      variant: 'danger',
-      confirmText: t('common.confirm'),
-      onConfirm: () => {
-        setEvents([]);
-        localStorage.removeItem(storageKey);
-        showNotification(t('usage.clear_success', { defaultValue: '统计缓存已清空' }), 'success');
-      },
-    });
+    setEvents([]);
+    showNotification(
+      t('usage.clear_local_only', {
+        defaultValue: '已清空当前页列表（服务端 SQLite 数据仍保留在 Keeper）',
+      }),
+      'success'
+    );
   };
 
   const downloadRequestLog = async (event: UsageEvent) => {
@@ -925,30 +908,28 @@ export function UsageAnalyticsPage() {
     showNotification(t('usage.export_success', { defaultValue: '已导出 JSONL' }), 'success');
   };
 
-  const resetPrices = () => {
-    setPrices(DEFAULT_MODEL_PRICES);
-    localStorage.removeItem(pricesStorageKey);
-    showNotification(t('usage.prices_reset', { defaultValue: '已恢复默认模型价格' }), 'success');
-  };
-
   return (
     <div className="flex w-full flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Badge variant={usageDisabled ? 'warning' : 'success'} className="rounded-full">
+          <Badge
+            variant={usageDisabled ? 'warning' : keeperOnline ? 'success' : 'warning'}
+            className="rounded-full"
+          >
             {usageDisabled
-              ? t('usage.capture_disabled', { defaultValue: '未启用' })
-              : t('usage.capture_ready', { defaultValue: '已就绪' })}
+              ? t('usage.capture_disabled', { defaultValue: 'CPA 统计关闭' })
+              : keeperOnline
+                ? t('usage.keeper_online', { defaultValue: 'Keeper 已连接' })
+                : t('usage.keeper_offline_short', { defaultValue: 'Keeper 离线' })}
           </Badge>
           <span className="inline-flex items-center gap-1.5">
             <Database className="size-4" />
-            {t('usage.cached_events', { defaultValue: '本地事件' })}:{' '}
+            {t('usage.events_loaded', { defaultValue: '事件' })}:{' '}
             {formatCompactNumber(events.length)}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Activity className="size-4" />
-            {t('usage.request_rate', { defaultValue: '请求速率' })}:{' '}
-            {formatRate(summary.requests, range)}
+            RPM: {summary.rpm ? summary.rpm.toFixed(2) : '0'}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Server className="size-4" />
@@ -979,6 +960,40 @@ export function UsageAnalyticsPage() {
           </Button>
         </div>
       </div>
+
+      <Card className="rounded-xl">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">
+            {t('usage.keeper_settings', { defaultValue: 'Keeper 数据源' })}
+          </CardTitle>
+          <CardDescription>
+            {t('usage.keeper_settings_desc', {
+              defaultValue: '用量数据由 CPA Usage Keeper 持久化；本页仅调用其 API，UI 仍为本主题。',
+            })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2">
+          <input
+            className="h-9 min-w-[280px] flex-1 rounded-md border border-border bg-background px-3 text-sm"
+            value={keeperBaseInput}
+            onChange={(e) => setKeeperBaseInput(e.target.value)}
+            placeholder="http://host:18317"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={applyKeeperBase}>
+            {t('common.save', { defaultValue: '保存' })}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void loadKeeperData()}
+            disabled={disableControls || loading}
+          >
+            <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+            {t('common.refresh')}
+          </Button>
+        </CardContent>
+      </Card>
 
       {error && (
         <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -1083,7 +1098,7 @@ export function UsageAnalyticsPage() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => loadUsageQueue()}
+              onClick={() => void loadKeeperData()}
               disabled={disableControls || loading}
             >
               <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
@@ -1150,7 +1165,6 @@ export function UsageAnalyticsPage() {
               locale={i18n.language}
               emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
               onDownload={downloadRequestLog}
-              prices={prices}
               showCost
               showFailBody
             />
@@ -1259,7 +1273,6 @@ export function UsageAnalyticsPage() {
                 locale={i18n.language}
                 emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
                 onDownload={downloadRequestLog}
-                prices={prices}
                 showCost
               />
             </CardContent>
@@ -1275,12 +1288,11 @@ export function UsageAnalyticsPage() {
                 <div>
                   <CardTitle>{t('usage.cost_by_model', { defaultValue: '模型成本排行' })}</CardTitle>
                   <CardDescription>
-                    {t('usage.cost_by_model_desc', { defaultValue: '按估算费用排序' })}
+                    {t('usage.cost_by_model_desc', {
+                      defaultValue: '价格在 Keeper 中维护；未配置时显示为 0',
+                    })}
                   </CardDescription>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={resetPrices}>
-                  {t('usage.reset_prices', { defaultValue: '重置价格' })}
-                </Button>
               </CardHeader>
               <CardContent>
                 <CostRankTable
@@ -1355,7 +1367,6 @@ export function UsageAnalyticsPage() {
                 locale={i18n.language}
                 emptyText={t('usage.empty_short', { defaultValue: '暂无数据' })}
                 onDownload={downloadRequestLog}
-                prices={prices}
                 showCost
               />
             </CardContent>

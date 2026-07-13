@@ -31,6 +31,9 @@ export interface UsageEvent {
   failStatusCode: number;
   failBody: string;
   tokens: UsageTokens;
+  /** Optional cost from Keeper (USD) */
+  costUsd?: number;
+  costAvailable?: boolean;
 }
 
 export interface UsageSummary {

@@ -10,6 +10,7 @@ export * from './authFiles';
 export * from './oauth';
 export * from './logs';
 export * from './usage';
+export * from './keeper';
 export * from './version';
 export * from './models';
 export * from './transformers';
